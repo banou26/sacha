@@ -5,7 +5,11 @@ edition = "2021"
 description = "A media string parser for filenames, torrent names, and any string representing media metadata"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+# wasm-opt provides ~5-8% size savings on top of Rust LTO.
+# Set to false if wasm-opt is not installed; otherwise wasm-pack uses it automatically.
+# Install via: apt install binaryen  (or cargo install wasm-opt)
+# Requires --enable-bulk-memory --enable-sign-ext flags for Rust 1.80+ output.
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-sign-ext"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
