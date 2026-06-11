@@ -89,7 +89,7 @@ fn digits1(input: &str) -> IResult<&str, &str> {
 }
 
 // ---------------------------------------------------------------------------
-// Term matchers — try each term from a list (longest first)
+// Term matchers - try each term from a list (longest first)
 // ---------------------------------------------------------------------------
 
 fn match_term_icase<'a>(terms: &'static [&'static str], input: &'a str) -> IResult<&'a str, &'a str> {
@@ -263,7 +263,7 @@ fn is_opening_delim(c: char) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Metadata token matchers — each returns a MetadataToken
+// Metadata token matchers - each returns a MetadataToken
 // ---------------------------------------------------------------------------
 
 fn parse_version(input: &str) -> IResult<&str, MetadataToken> {
@@ -364,7 +364,7 @@ fn parse_group_from_hyphen(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 // ---------------------------------------------------------------------------
-// Ordered metadata token attempt — matches the TypeScript ordering
+// Ordered metadata token attempt - matches the TypeScript ordering
 // ---------------------------------------------------------------------------
 
 /// The ordered list of metadata parsers tried inside delimited blocks.
@@ -593,7 +593,7 @@ fn trim_non_word(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// ParseResult — the public output type
+// ParseResult - the public output type
 // ---------------------------------------------------------------------------
 
 use serde::Serialize;
