@@ -14,12 +14,13 @@ use crate::common::*;
 /// but returns the original text from the input (preserving original casing).
 fn istr<'a>(pattern: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     move |input: &'a str| {
-        let pat_len = pattern.len();
-        if input.len() < pat_len {
+        // `get` rather than `[..]`: pattern lengths are byte counts, so a multi-byte
+        // char straddling `pat_len` would panic on a direct slice
+        let Some(head) = input.get(..pattern.len()) else {
             return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
-        }
-        if input[..pat_len].eq_ignore_ascii_case(pattern) {
-            Ok((&input[pat_len..], &input[..pat_len]))
+        };
+        if head.eq_ignore_ascii_case(pattern) {
+            Ok((&input[pattern.len()..], head))
         } else {
             Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
         }
@@ -112,9 +113,10 @@ fn match_term_exact<'a>(terms: &'static [&'static str], input: &'a str) -> IResu
 
 fn match_term_list_icase<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
-        let pat_len = term.len();
-        if input.len() >= pat_len && input[..pat_len].eq_ignore_ascii_case(term) {
-            return Ok((&input[pat_len..], &input[..pat_len]));
+        // `get` rather than `[..]`, for the same char-boundary reason as `istr`
+        let Some(head) = input.get(..term.len()) else { continue };
+        if head.eq_ignore_ascii_case(term) {
+            return Ok((&input[term.len()..], head));
         }
     }
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
@@ -584,7 +586,14 @@ fn is_non_word(c: char) -> bool {
 fn trim_non_word(s: &str) -> String {
     let trimmed = s.trim();
     let start = trimmed.find(|c: char| !is_non_word(c)).unwrap_or(0);
-    let end = trimmed.rfind(|c: char| !is_non_word(c)).map(|i| i + 1).unwrap_or(0);
+    // `i + c.len_utf8()`, not `i + 1`: the index points at where the char starts,
+    // so a multi-byte trailing char would leave `end` inside it
+    let end = trimmed
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_non_word(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
     if start >= end {
         String::new()
     } else {
