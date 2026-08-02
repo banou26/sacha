@@ -1,8 +1,10 @@
 mod common;
 mod normalize;
 mod parser;
+mod search;
 
 pub use parser::{parse, ParseResult};
+pub use search::{Index, SearchConfig, SearchHit};
 
 use wasm_bindgen::prelude::*;
 

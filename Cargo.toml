@@ -8,14 +8,27 @@ description = "A media string parser for filenames, torrent names, and any strin
 # wasm-opt provides ~5-8% size savings on top of Rust LTO.
 # Set to false if wasm-opt is not installed; otherwise wasm-pack uses it automatically.
 # Install via: apt install binaryen  (or cargo install wasm-opt)
-# Requires --enable-bulk-memory --enable-sign-ext flags for Rust 1.80+ output.
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-sign-ext"]
+# The feature flags have to cover everything rustc emits, or wasm-opt refuses the
+# module: recent toolchains add nontrapping-float-to-int, reference types and
+# multivalue on top of the bulk-memory and sign-ext that Rust 1.80 introduced.
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-sign-ext",
+    "--enable-nontrapping-float-to-int",
+    "--enable-reference-types",
+    "--enable-multivalue",
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# `safe_read` drops frizbee's read past the end of a haystack, which assumes a
+# 4096-byte page and does not hold in wasm linear memory.
+frizbee = { version = "0.12", features = ["safe_read"] }
 nom = "7"
+js-sys = "0.3"
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
