@@ -1,5 +1,9 @@
 use std::sync::OnceLock;
 
+/// The numeric source of truth for [`RESOLUTION_STRS`], which is what the
+/// parser actually reads. Only the drift test between the two consults this, so
+/// it is dead outside tests by design.
+#[allow(dead_code)]
 pub const RESOLUTIONS: &[u16] = &[320, 480, 540, 640, 720, 1080, 1440, 2160, 2880, 4320, 5120, 7680];
 
 pub const VIDEO_CODECS: &[&str] = &[

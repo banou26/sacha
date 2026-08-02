@@ -231,6 +231,12 @@ node, one query over a freshly parsed list:
 Cost is linear in the number of names, so a list of a few dozen is a couple of
 milliseconds.
 
+The repeat-search column assumes the default `maxTypos: 0`. Setting it to `null`
+scores every entry rather than prefiltering, which costs tens of times more per
+search: on the 1175 name list, one query goes from about 0.03 ms to about 0.9 ms.
+Still small beside the parse, but not free, so prefer the default when a query
+plainly appears in the names you are matching.
+
 ### Todos:
 - make a system that takes all terms, sort them by length, apply them, and re-categorize them back to prevent issues with small terms overriding longer ones
 - `format()` currently returns the same shape as `parse()`, and `infer()` does not exist yet; the examples above describe the intended API rather than the current one
