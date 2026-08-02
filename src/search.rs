@@ -273,6 +273,27 @@ impl JsReleaseIndex {
     }
 }
 
+/// Parses `names` and ranks them against `queries` in one call.
+///
+/// Equivalent to building a [`ReleaseIndex`](JsReleaseIndex) and searching it
+/// once, without a handle to keep or free. Prefer it for a list you query once
+/// and discard; keep the index when several queries run against one list, since
+/// the parse is the whole cost and the index pays it only once.
+#[wasm_bindgen(js_name = searchNames, unchecked_return_type = "SearchHit[]")]
+pub fn js_search_names(
+    names: Vec<String>,
+    queries: Vec<String>,
+    #[wasm_bindgen(unchecked_param_type = "SearchOptions | null | undefined")] options: Option<
+        js_sys::Object,
+    >,
+) -> Result<JsValue, JsValue> {
+    let config = read_options(options.as_ref())?;
+    let hits = Index::build(&names)
+        .search(&queries, config)
+        .map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&hits).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// Longest query the given options accept, in characters.
 #[wasm_bindgen(js_name = maxQueryLen)]
 pub fn js_max_query_len(

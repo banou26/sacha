@@ -67,6 +67,20 @@ export class ReleaseIndex {
   free(): void
 }
 
+/**
+ * Parses `names` and ranks them against `queries` in one call.
+ *
+ * Equivalent to building a `ReleaseIndex` and searching it once, without a
+ * handle to keep or free. Prefer it for a list you query once and discard; keep
+ * the index when several queries run against one list, since the parse is the
+ * whole cost and the index pays it only once.
+ */
+export function searchNames(
+  names: string[],
+  queries: string[],
+  options?: SearchOptions | null
+): SearchHit[]
+
 /** Longest query the given options accept, in characters. */
 export function maxQueryLen(options?: SearchOptions | null): number
 

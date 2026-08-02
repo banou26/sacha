@@ -176,6 +176,19 @@ only `進撃の巨人` and one named only `Attack on Titan` are the same show, a
 single query reaches both. Each release is scored by its best (alias, title
 candidate) pair.
 
+For a list you query once and discard, `searchNames` does the same work without
+a handle to keep or free:
+
+```ts
+import { searchNames } from 'sacha'
+
+const hits = searchNames(scrapedNames, ['Shingeki no Kyojin', 'Attack on Titan'], { limit: 20 })
+```
+
+The two cost the same. Keep a `ReleaseIndex` only when several queries run
+against one list: parsing is the whole cost and the index pays it once, so a
+repeat search is about 0.03 ms where the first is a few milliseconds.
+
 ### Options
 
 | option | default | meaning |
@@ -201,7 +214,22 @@ module down. Over-long queries throw instead.
 
 Against 1175 real nyaa.si names, 50 of them Attack on Titan releases and the
 rest unrelated, searching the four aliases above returns 50 of 50 with no false
-positives, in about 4 ms.
+positives.
+
+### Cost
+
+Parsing is the whole cost; building the index adds nothing measurable, and
+matching an already-parsed list is a rounding error. Measured in wasm under
+node, one query over a freshly parsed list:
+
+| names | parse and search | search again on the same index |
+| --- | --- | --- |
+| 50 | 1.5 ms | 0.02 ms |
+| 100 | 3.0 ms | 0.03 ms |
+| 1175 | 33 ms | 2.1 ms |
+
+Cost is linear in the number of names, so a list of a few dozen is a couple of
+milliseconds.
 
 ### Todos:
 - make a system that takes all terms, sort them by length, apply them, and re-categorize them back to prevent issues with small terms overriding longer ones
