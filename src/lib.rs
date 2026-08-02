@@ -1,4 +1,5 @@
 mod common;
+mod normalize;
 mod parser;
 
 pub use parser::{parse, ParseResult};

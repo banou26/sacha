@@ -111,6 +111,18 @@ fn match_term_exact<'a>(terms: &'static [&'static str], input: &'a str) -> IResu
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
+/// Case-sensitive counterpart of [`match_term_list_icase`], for codes that are
+/// written in caps by convention. `CHI` is a language tag; `Chi` is a word in a
+/// title.
+fn match_term_list_exact<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
+    for term in terms {
+        if input.get(..term.len()) == Some(*term) {
+            return Ok((&input[term.len()..], &input[..term.len()]));
+        }
+    }
+    Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+}
+
 fn match_term_list_icase<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
         // `get` rather than `[..]`, for the same char-boundary reason as `istr`
@@ -158,6 +170,10 @@ fn resolution_primitive(input: &str) -> IResult<&str, String> {
 }
 
 fn resolution_token(input: &str) -> IResult<&str, String> {
+    // shorthand such as `4K` carries no line count for `resolution_number`
+    if let Ok((rest, alias)) = match_term_list_icase(RESOLUTION_ALIASES, input) {
+        return Ok((rest, alias.to_string()));
+    }
     let (rest, first) = resolution_primitive(input)?;
     // try "x" separator for e.g. "1080x720p"
     if let Ok((rest2, _)) = istr("x")(rest) {
@@ -253,6 +269,18 @@ fn non_delimited_group(input: &str) -> IResult<&str, String> {
     if name.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
     }
+    // A group tag is the tail of the name, as in `x265-Rapta` or
+    // `-VARYG (Shingeki no Kyojin)`. Requiring that keeps the honorific in
+    // `Kobayashi-san Chi no Maid Dragon` attached to the title.
+    let tail = rest.trim_start_matches(|c: char| is_whitespace(c));
+    let ends_the_name = tail.is_empty()
+        || tail.starts_with(|c: char| is_opening_delim(c) || is_closing_delim(c))
+        // `VOSTFR-LTPD v2` puts a version after the group tag
+        || parse_version(tail).is_ok()
+        || try_metadata_token(tail).is_ok();
+    if !ends_the_name {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+    }
     Ok((rest, name.to_string()))
 }
 
@@ -338,15 +366,17 @@ fn parse_audio_language(input: &str) -> IResult<&str, MetadataToken> {
     if let Ok((rest, v)) = match_term_exact(AUDIO_LANGUAGE_TERMS_CASE_SENSITIVE, input) {
         return Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }));
     }
-    // Try language codes (case insensitive)
+    // Language codes are written in caps in release names; matching them
+    // loosely turns the `Chi` of `Kobayashi-san Chi no Maid Dragon` into Chinese
     let codes = language_codes();
-    let (rest, v) = match_term_list_icase(&codes, input)?;
+    let (rest, v) = match_term_list_exact(&codes, input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }))
 }
 
 fn parse_source_term(input: &str) -> IResult<&str, MetadataToken> {
+    // likewise caps by convention: `CR` is Crunchyroll, `Cr` is part of a word
     let keys = source_term_keys();
-    let (rest, v) = match_term_list_icase(&keys, input)?;
+    let (rest, v) = match_term_list_exact(&keys, input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SourceTerm, value: v.to_string() }))
 }
 
@@ -426,13 +456,98 @@ fn parse_one_delimited<'a>(input: &'a str, open: char, close: char) -> IResult<&
     Ok((after_close, RootToken::Metadata(tokens)))
 }
 
-/// Parse the content inside delimiters, extracting metadata tokens and skipping non-metadata text.
-fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
+/// Characters that join two metadata terms inside one bracket, as in
+/// `HEVC-10bit` or `CHS/CHT`.
+fn is_term_joiner(c: char) -> bool {
+    matches!(c, '-' | '/' | '&' | ',' | '+' | '_' | '|') || is_whitespace(c)
+}
+
+/// Reads `text` as a run of metadata terms separated by punctuation, returning
+/// the tokens only when the whole of it is accounted for. A single leftover
+/// word makes it a title instead, so this never eats a name.
+fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
+    let mut rest = text.trim();
+    if rest.is_empty() {
+        return None;
+    }
     let mut tokens = Vec::new();
+    while !rest.is_empty() {
+        rest = rest.trim_start_matches(is_term_joiner);
+        if rest.is_empty() {
+            break;
+        }
+        let (next, token) = try_metadata_token(rest).ok()?;
+        // the term has to end where a joiner or the text does, so `WEB` cannot
+        // claim the front of `WEBHOOK`
+        if !next.is_empty() && !next.starts_with(is_term_joiner) {
+            return None;
+        }
+        tokens.push(token);
+        rest = next;
+    }
+    (!tokens.is_empty()).then_some(tokens)
+}
+
+/// Text left over inside a delimited block once the metadata is taken out is
+/// worth keeping only when it could be a name. Episode counts, language tags
+/// and CRC32 stamps are not.
+/// A checksum such as `91ABD6D7` or `40DD2396`: hex digits only, and long
+/// enough that a short word like `dead` cannot be mistaken for one.
+fn is_hex_stamp(text: &str) -> bool {
+    text.len() >= 6
+        && text.chars().all(|c| c.is_ascii_hexdigit())
+        && text.chars().any(|c| c.is_ascii_digit())
+}
+
+fn is_title_like(text: &str) -> bool {
+    if !text.chars().any(char::is_alphabetic) {
+        return false;
+    }
+    if is_hex_stamp(text) {
+        return false;
+    }
+    // a bracket holding only an annotation, as in `(subs only)`
+    if NOTE_TERMS.iter().any(|n| text.eq_ignore_ascii_case(n)) {
+        return false;
+    }
+    true
+}
+
+/// Parse the content inside delimiters, extracting metadata tokens and keeping
+/// the text between them.
+///
+/// Bracketed text that is not metadata is usually a title or an alias of one:
+/// `[名探偵プリキュア！/Star Detective Precure！]` is the only title that name
+/// carries, and `(Shingeki no Kyojin)` is the romaji alias of a Cyrillic title.
+/// Both used to be discarded a character at a time.
+fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
+    // A bracket holding just a CRC32 stamp has to be rejected whole. Tokenizing
+    // it lets the date parser claim the `2396` of `40DD2396` and strand `40DD`
+    // as a title.
+    if is_hex_stamp(input.trim()) {
+        return Vec::new();
+    }
+
+    let mut tokens = Vec::new();
+    let mut pending = String::new();
+
+    fn flush(pending: &mut String, tokens: &mut Vec<MetadataToken>) {
+        let text = trim_non_word(pending);
+        pending.clear();
+        // `HEVC-10bit` is two terms joined by punctuation, not a name. Accepting
+        // the split only when every piece is metadata keeps a real title such as
+        // `Web-Shooter` intact.
+        if let Some(mut inner) = all_metadata(&text) {
+            tokens.append(&mut inner);
+        } else if is_title_like(&text) {
+            tokens.push(MetadataToken { kind: MetadataKind::Title, value: text });
+        }
+    }
 
     while !input.is_empty() {
         // Skip leading whitespace
-        if let Ok((rest, _)) = ws(input) {
+        if let Ok((rest, ws_text)) = ws(input) {
+            pending.push_str(ws_text);
             input = rest;
             if input.is_empty() {
                 break;
@@ -447,18 +562,20 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
                 || rest.starts_with(|c: char| is_whitespace(c))
                 || rest.starts_with(|c: char| is_closing_delim(c))
             {
+                flush(&mut pending, &mut tokens);
                 tokens.push(token);
                 input = rest;
                 continue;
             }
         }
 
-        // Skip one character and continue
+        // Not metadata: hold the character as possible title text
         let mut chars = input.chars();
-        chars.next();
+        pending.push(chars.next().unwrap());
         input = chars.as_str();
     }
 
+    flush(&mut pending, &mut tokens);
     tokens
 }
 
@@ -679,6 +796,11 @@ impl ParseResult {
 // ---------------------------------------------------------------------------
 
 pub fn parse(input: &str) -> Result<ParseResult, String> {
+    // Scene releases delimit words with `.` or `_`; the tokenizer below needs
+    // whitespace to see word boundaries at all.
+    let normalized = crate::normalize::normalize_separators(input);
+    let input = normalized.as_ref();
+
     let (_, tokens) = parse_all_tokens(input)
         .map_err(|e| format!("Parser errored: {:?}", e))?;
 
@@ -702,6 +824,13 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
 
                 if first {
                     first = false;
+                    // A leading bracket holding nothing but text is the release
+                    // group, as in `[SubsPlease]`, so it outranks the title
+                    // reading that `parse_inner_metadata` gives it.
+                    if items.len() == 1 && items[0].kind == MetadataKind::Title {
+                        result.push(&MetadataKind::Group, items[0].value.clone());
+                        continue;
+                    }
                     // Special case: if first metadata block is empty (all content was
                     // unrecognized strings inside brackets), extract the raw text as group
                     if items.is_empty() {
@@ -786,7 +915,12 @@ mod tests {
         let r = parse("[EMBER] Cyberpunk: Edgerunners (2022) (Season 1) [WEBRip] [1080p Dual Audio HEVC 10 bits] (Cyberpunk Edgerunners) (Batch)").unwrap();
         assert_eq!(r.groups.as_deref(), Some(&["EMBER".to_string()][..]));
         assert_eq!(r.dates.as_deref(), Some(&["2022".to_string()][..]));
-        assert_eq!(r.titles.as_deref(), Some(&["Cyberpunk: Edgerunners".to_string()][..]));
+        // the trailing `(Cyberpunk Edgerunners)` is an alias of the same show and
+        // is now kept as a second title candidate
+        assert_eq!(
+            r.titles.as_deref(),
+            Some(&["Cyberpunk: Edgerunners".to_string(), "Cyberpunk Edgerunners".to_string()][..])
+        );
         assert_eq!(r.resolution_terms.as_deref(), Some(&["1080p".to_string()][..]));
         assert_eq!(r.video_codec_terms.as_deref(), Some(&["HEVC".to_string(), "10 bits".to_string()][..]));
         assert_eq!(r.audio_terms.as_deref(), Some(&["Dual Audio".to_string()][..]));

@@ -24,7 +24,7 @@ pub const AUDIO_CODECS: &[&str] = &[
     "DDP5.1",
     "LOSSLESS",
     "Vorbis", "VORBIS",
-    "DDP5",
+    "DDP5", "DDP",
     "FLAC", "ALAC", "EAC3",
     "G.722", "G.711",
     "Opus",
@@ -41,18 +41,30 @@ pub const VIDEO_TERMS: &[&str] = &[
 ];
 
 pub const TYPE_TERMS: &[&str] = &[
-    "WEB-DL", "WEBRip", "WEB",
+    // sorted by length descending: the matcher takes the first hit, so "BD"
+    // must not shadow "BDRip"
+    "BDRemux", "HDTVRip",
+    "Blu-Ray", "Blu-ray",
+    "BluRay", "BDRip", "DVDRip", "WEB-DL", "WEBRip",
+    "WEB-RIP", "TVRip", "WEBDL", "REMUX", "HDTV",
+    "BDMV", "DVD", "UHD", "WEB",
+    "BD",
 ];
 
 pub const CONTAINER_TERMS: &[&str] = &[
     "MPEG-2", "MPEG",
     "ADTS", "FLAC",
-    "3GP", "MP4", "Ogg", "MOV", "MKV",
+    "WEBM", "3GP", "MP4", "M4A", "M4V", "Ogg", "MOV", "MKV", "AVI",
 ];
 
 pub const SUBTITLE_TERMS: &[&str] = &[
-    "multiple subtitle", "multi-subs", "multi subs", "multi-sub", "subtitle",
+    "multiple subtitles", "multiple subtitle",
+    "multi-subs", "multi subs", "multi-sub", "multisubs", "multisub",
+    "subtitle",
 ];
+
+/// Resolutions written as a shorthand rather than a line count.
+pub const RESOLUTION_ALIASES: &[&str] = &["4320p", "2160p", "8K", "4K", "2K"];
 
 pub const BATCH_TERMS: &[&str] = &[
     "batched", "batch",
@@ -120,6 +132,29 @@ pub const NORMALIZED_SUBTITLE_LANGUAGES: &[LangMapping] = &[
 pub const SOURCE_TERMS: &[(&str, &str)] = &[
     ("NF", "Netflix"),
     ("AMZ", "Amazon"),
+    ("AMZN", "Amazon"),
+    ("CR", "Crunchyroll"),
+    ("DSNP", "Disney+"),
+    ("HULU", "Hulu"),
+    ("ATVP", "Apple TV+"),
+    ("HMAX", "HBO Max"),
+    ("VRV", "VRV"),
+    ("FUNI", "Funimation"),
+    ("ADN", "Animation Digital Network"),
+    ("B-Global", "Bilibili Global"),
+    ("Baha", "Bahamut"),
+    ("IQ", "iQIYI"),
+];
+
+/// Annotations that occupy a bracket on their own. They read as words but name
+/// nothing, so they are dropped rather than kept as titles. Matched against the
+/// whole bracket content, case-insensitively, never as a substring.
+pub const NOTE_TERMS: &[&str] = &[
+    "subs only", "sub only", "subbed", "dubbed", "hardsub", "hardsubs",
+    "softsub", "softsubs", "eng sub", "eng subs", "no subs", "raw", "raws",
+    "reseed", "fin", "end", "final", "complete", "completo", "ongoing",
+    "airing", "repack", "fixed", "censored", "uncensored", "unknown",
+    "new", "old", "part", "extra", "extras", "bonus", "misc", "other",
 ];
 
 pub const DELIMITERS: &[(char, char)] = &[
