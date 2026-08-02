@@ -1,7 +1,7 @@
 use nom::{
     IResult,
     branch::alt,
-    bytes::complete::{tag, take_while1, take_while_m_n},
+    bytes::complete::{take_while1, take_while_m_n},
     character::complete::{char, satisfy},
     combinator::recognize,
     multi::many1,
@@ -93,22 +93,11 @@ fn digits1(input: &str) -> IResult<&str, &str> {
 // Term matchers - try each term from a list (longest first)
 // ---------------------------------------------------------------------------
 
-/// True when `term` could start at `input`, judged on the first byte alone.
-/// The scan tries every term list at every character position, so rejecting on
-/// one byte before sub-slicing and comparing the whole term is worth doing.
-#[inline]
-fn first_byte_matches(term: &str, input: &str) -> bool {
-    match (input.as_bytes().first(), term.as_bytes().first()) {
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        _ => false,
-    }
-}
-
-fn match_term_icase<'a>(terms: &'static [&'static str], input: &'a str) -> IResult<&'a str, &'a str> {
-    for term in terms {
-        if !first_byte_matches(term, input) {
-            continue;
-        }
+/// Finds the first term in `idx` that starts at `input`, ignoring case.
+/// Only the bucket sharing the input's first byte is visited, so the term that
+/// wins is the same one the full scan would have found.
+fn match_indexed_icase<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
+    for term in idx.candidates(input) {
         if let Ok(result) = istr(term)(input) {
             return Ok(result);
         }
@@ -116,42 +105,11 @@ fn match_term_icase<'a>(terms: &'static [&'static str], input: &'a str) -> IResu
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
-fn match_term_exact<'a>(terms: &'static [&'static str], input: &'a str) -> IResult<&'a str, &'a str> {
-    for term in terms {
-        if !first_byte_matches(term, input) {
-            continue;
-        }
-        if let Ok(result) = tag::<&str, &str, nom::error::Error<&str>>(*term)(input) {
-            return Ok(result);
-        }
-    }
-    Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
-}
-
-/// Case-sensitive counterpart of [`match_term_list_icase`], for codes that are
-/// written in caps by convention. `CHI` is a language tag; `Chi` is a word in a
-/// title.
-fn match_term_list_exact<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
-    for term in terms {
-        if !first_byte_matches(term, input) {
-            continue;
-        }
+/// Case-sensitive counterpart of `match_indexed_icase`.
+fn match_indexed_exact<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
+    for term in idx.candidates(input) {
         if input.get(..term.len()) == Some(*term) {
             return Ok((&input[term.len()..], &input[..term.len()]));
-        }
-    }
-    Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
-}
-
-fn match_term_list_icase<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
-    for term in terms {
-        if !first_byte_matches(term, input) {
-            continue;
-        }
-        // `get` rather than `[..]`, for the same char-boundary reason as `istr`
-        let Some(head) = input.get(..term.len()) else { continue };
-        if head.eq_ignore_ascii_case(term) {
-            return Ok((&input[term.len()..], head));
         }
     }
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
@@ -186,7 +144,7 @@ fn resolution_primitive(input: &str) -> IResult<&str, String> {
 
 fn resolution_token(input: &str) -> IResult<&str, String> {
     // shorthand such as `4K` carries no line count for `resolution_number`
-    if let Ok((rest, alias)) = match_term_list_icase(RESOLUTION_ALIASES, input) {
+    if let Ok((rest, alias)) = match_indexed_icase(ix_resolution_aliases(), input) {
         return Ok((rest, alias.to_string()));
     }
     let (rest, first) = resolution_primitive(input)?;
@@ -265,7 +223,7 @@ fn episode_token(input: &str) -> IResult<&str, String> {
 // ---------------------------------------------------------------------------
 
 fn season_token(input: &str) -> IResult<&str, String> {
-    let (rest, part) = match_term_icase(SEASON_PART_TERMS, input)?;
+    let (rest, part) = match_indexed_icase(ix_season_part_terms(), input)?;
     let (rest, digits_and_spaces) = take_while1(|c: char| c.is_ascii_digit() || c == ' ')(rest)?;
     if !digits_and_spaces.chars().any(|c| c.is_ascii_digit()) {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
@@ -317,32 +275,32 @@ fn parse_version(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 fn parse_type_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(TYPE_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_type_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::TypeTerm, value: v.to_string() }))
 }
 
 fn parse_audio_codec(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(AUDIO_CODECS, input)?;
+    let (rest, v) = match_indexed_icase(ix_audio_codecs(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioCodec, value: v.to_string() }))
 }
 
 fn parse_audio_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(AUDIO_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_audio_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioTerm, value: v.to_string() }))
 }
 
 fn parse_container_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(CONTAINER_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_container_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::ContainerTerm, value: v.to_string() }))
 }
 
 fn parse_video_codec(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(VIDEO_CODECS, input)?;
+    let (rest, v) = match_indexed_icase(ix_video_codecs(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::VideoCodec, value: v.to_string() }))
 }
 
 fn parse_video_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(VIDEO_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_video_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::VideoTerm, value: v.to_string() }))
 }
 
@@ -352,12 +310,12 @@ fn parse_resolution(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 fn parse_batch_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(BATCH_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_batch_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::BatchTerm, value: v.to_string() }))
 }
 
 fn parse_subtitle_term(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_icase(SUBTITLE_TERMS, input)?;
+    let (rest, v) = match_indexed_icase(ix_subtitle_terms(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SubtitleTerm, value: v.to_string() }))
 }
 
@@ -367,28 +325,28 @@ fn parse_season_term(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 fn parse_subtitle_language(input: &str) -> IResult<&str, MetadataToken> {
-    let (rest, v) = match_term_list_icase(subtitle_language_codes(), input)?;
+    let (rest, v) = match_indexed_icase(ix_subtitle_language_codes(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SubtitleLanguage, value: v.to_string() }))
 }
 
 fn parse_audio_language(input: &str) -> IResult<&str, MetadataToken> {
     // Try audio language terms first (case insensitive) - these are longer
-    if let Ok((rest, v)) = match_term_icase(AUDIO_LANGUAGE_TERMS, input) {
+    if let Ok((rest, v)) = match_indexed_icase(ix_audio_language_terms(), input) {
         return Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }));
     }
     // Try case-sensitive terms
-    if let Ok((rest, v)) = match_term_exact(AUDIO_LANGUAGE_TERMS_CASE_SENSITIVE, input) {
+    if let Ok((rest, v)) = match_indexed_exact(ix_audio_language_exact(), input) {
         return Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }));
     }
     // Language codes are written in caps in release names; matching them
     // loosely turns the `Chi` of `Kobayashi-san Chi no Maid Dragon` into Chinese
-    let (rest, v) = match_term_list_exact(language_codes(), input)?;
+    let (rest, v) = match_indexed_exact(ix_language_codes(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }))
 }
 
 fn parse_source_term(input: &str) -> IResult<&str, MetadataToken> {
     // likewise caps by convention: `CR` is Crunchyroll, `Cr` is part of a word
-    let (rest, v) = match_term_list_exact(source_term_keys(), input)?;
+    let (rest, v) = match_indexed_exact(ix_source_term_keys(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SourceTerm, value: v.to_string() }))
 }
 

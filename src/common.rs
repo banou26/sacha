@@ -221,4 +221,176 @@ mod tests {
         let spelled: Vec<String> = RESOLUTIONS.iter().map(|r| r.to_string()).collect();
         assert_eq!(spelled, RESOLUTION_STRS);
     }
+
+    /// Every list reached by a bucketed matcher, and whether it is matched
+    /// case-sensitively.
+    fn indexed_lists() -> Vec<(&'static str, Vec<&'static str>, bool)> {
+        vec![
+            ("TYPE_TERMS", TYPE_TERMS.to_vec(), false),
+            ("AUDIO_CODECS", AUDIO_CODECS.to_vec(), false),
+            ("AUDIO_TERMS", AUDIO_TERMS.to_vec(), false),
+            ("CONTAINER_TERMS", CONTAINER_TERMS.to_vec(), false),
+            ("VIDEO_CODECS", VIDEO_CODECS.to_vec(), false),
+            ("VIDEO_TERMS", VIDEO_TERMS.to_vec(), false),
+            ("BATCH_TERMS", BATCH_TERMS.to_vec(), false),
+            ("SUBTITLE_TERMS", SUBTITLE_TERMS.to_vec(), false),
+            ("SEASON_PART_TERMS", SEASON_PART_TERMS.to_vec(), false),
+            ("RESOLUTION_ALIASES", RESOLUTION_ALIASES.to_vec(), false),
+            ("AUDIO_LANGUAGE_TERMS", AUDIO_LANGUAGE_TERMS.to_vec(), false),
+            ("AUDIO_LANGUAGE_TERMS_CASE_SENSITIVE", AUDIO_LANGUAGE_TERMS_CASE_SENSITIVE.to_vec(), true),
+            ("language_codes", language_codes().to_vec(), true),
+            ("subtitle_language_codes", subtitle_language_codes().to_vec(), false),
+            ("source_term_keys", source_term_keys().to_vec(), true),
+            ("RESOLUTION_STRS", RESOLUTION_STRS.to_vec(), false),
+            ("NOTE_TERMS", NOTE_TERMS.to_vec(), false),
+        ]
+    }
+
+    /// An empty term would match at every position. Nothing else stops one from
+    /// being added, and the bucketed matchers would silently skip it where the
+    /// old full scan matched it, so the absence is asserted rather than assumed.
+    #[test]
+    fn no_term_list_contains_an_empty_string() {
+        for (name, terms, _) in indexed_lists() {
+            assert!(
+                terms.iter().all(|t| !t.is_empty()),
+                "{name} contains an empty term"
+            );
+        }
+    }
+
+    /// A bucket has to hold exactly the terms a full scan would have considered,
+    /// in the order the list declares them. That is what makes bucketing produce
+    /// the same winner as scanning, so the parser's output does not shift.
+    #[test]
+    fn buckets_match_a_full_scan_in_order() {
+        for (name, terms, case_sensitive) in indexed_lists() {
+            let index = if case_sensitive {
+                TermIndex::exact(&terms)
+            } else {
+                TermIndex::icase(&terms)
+            };
+            // every ASCII first byte, which is all a term can start with here
+            for byte in 0u8..128 {
+                let probe = String::from_utf8(vec![byte, b'x']).unwrap();
+                let expected: Vec<&str> = terms
+                    .iter()
+                    .copied()
+                    .filter(|t| {
+                        let first = t.as_bytes()[0];
+                        if case_sensitive {
+                            first == byte
+                        } else {
+                            first.eq_ignore_ascii_case(&byte)
+                        }
+                    })
+                    .collect();
+                assert_eq!(
+                    index.candidates(&probe),
+                    expected.as_slice(),
+                    "{name} bucket for byte {byte} diverges from a full scan"
+                );
+            }
+            // a multi-byte character leads with a byte no ASCII term can carry
+            assert!(index.candidates("進撃の巨人").is_empty(), "{name} matched a CJK lead byte");
+            assert!(index.candidates("").is_empty(), "{name} matched empty input");
+        }
+    }
+}
+
+/// A term list bucketed by the first byte of each term.
+///
+/// The matchers are called at nearly every character position, and each one
+/// used to walk its whole list to reject on the first byte. Bucketing turns
+/// that scan into an index: only the terms that can possibly match are visited,
+/// in their original relative order, so the term that wins is unchanged.
+pub struct TermIndex {
+    flat: Vec<&'static str>,
+    offsets: [u32; 257],
+    case_sensitive: bool,
+}
+
+impl TermIndex {
+    pub fn icase(terms: &[&'static str]) -> Self {
+        Self::build(terms, false)
+    }
+
+    pub fn exact(terms: &[&'static str]) -> Self {
+        Self::build(terms, true)
+    }
+
+    fn build(terms: &[&'static str], case_sensitive: bool) -> Self {
+        let key = |t: &str| {
+            let b = *t.as_bytes().first().unwrap_or(&0);
+            if case_sensitive { b } else { b.to_ascii_lowercase() }
+        };
+        let mut counts = [0u32; 256];
+        for t in terms {
+            counts[key(t) as usize] += 1;
+        }
+        let mut offsets = [0u32; 257];
+        let mut acc = 0;
+        for b in 0..256 {
+            offsets[b] = acc;
+            acc += counts[b];
+        }
+        offsets[256] = acc;
+        // counting sort, filling each bucket left to right, which keeps the
+        // terms in the order the original list declared them
+        let mut cursor = offsets;
+        let mut flat = vec![""; terms.len()];
+        for t in terms {
+            let k = key(t) as usize;
+            flat[cursor[k] as usize] = t;
+            cursor[k] += 1;
+        }
+        Self { flat, offsets, case_sensitive }
+    }
+
+    /// The terms that could start at `input`, in declaration order.
+    #[inline]
+    pub fn candidates(&self, input: &str) -> &[&'static str] {
+        let Some(&b) = input.as_bytes().first() else {
+            return &[];
+        };
+        let k = if self.case_sensitive { b } else { b.to_ascii_lowercase() } as usize;
+        &self.flat[self.offsets[k] as usize..self.offsets[k + 1] as usize]
+    }
+}
+
+macro_rules! term_index {
+    ($name:ident, $kind:ident, $terms:expr) => {
+        pub fn $name() -> &'static TermIndex {
+            static I: OnceLock<TermIndex> = OnceLock::new();
+            I.get_or_init(|| TermIndex::$kind($terms))
+        }
+    };
+}
+
+term_index!(ix_type_terms, icase, TYPE_TERMS);
+term_index!(ix_audio_codecs, icase, AUDIO_CODECS);
+term_index!(ix_audio_terms, icase, AUDIO_TERMS);
+term_index!(ix_container_terms, icase, CONTAINER_TERMS);
+term_index!(ix_video_codecs, icase, VIDEO_CODECS);
+term_index!(ix_video_terms, icase, VIDEO_TERMS);
+term_index!(ix_batch_terms, icase, BATCH_TERMS);
+term_index!(ix_subtitle_terms, icase, SUBTITLE_TERMS);
+term_index!(ix_season_part_terms, icase, SEASON_PART_TERMS);
+term_index!(ix_resolution_aliases, icase, RESOLUTION_ALIASES);
+term_index!(ix_audio_language_terms, icase, AUDIO_LANGUAGE_TERMS);
+term_index!(ix_audio_language_exact, exact, AUDIO_LANGUAGE_TERMS_CASE_SENSITIVE);
+
+pub fn ix_language_codes() -> &'static TermIndex {
+    static I: OnceLock<TermIndex> = OnceLock::new();
+    I.get_or_init(|| TermIndex::exact(language_codes()))
+}
+
+pub fn ix_subtitle_language_codes() -> &'static TermIndex {
+    static I: OnceLock<TermIndex> = OnceLock::new();
+    I.get_or_init(|| TermIndex::icase(subtitle_language_codes()))
+}
+
+pub fn ix_source_term_keys() -> &'static TermIndex {
+    static I: OnceLock<TermIndex> = OnceLock::new();
+    I.get_or_init(|| TermIndex::exact(source_term_keys()))
 }

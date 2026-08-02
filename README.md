@@ -224,9 +224,9 @@ node, one query over a freshly parsed list:
 
 | names | parse and search | search again on the same index |
 | --- | --- | --- |
-| 50 | 1.5 ms | 0.02 ms |
-| 100 | 3.0 ms | 0.03 ms |
-| 1175 | 33 ms | 2.1 ms |
+| 50 | 1.1 ms | 0.02 ms |
+| 100 | 2.2 ms | 0.03 ms |
+| 1175 | 25 ms | 2.0 ms |
 
 Cost is linear in the number of names, so a list of a few dozen is a couple of
 milliseconds.
