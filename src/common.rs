@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 pub const RESOLUTIONS: &[u16] = &[320, 480, 540, 640, 720, 1080, 1440, 2160, 2880, 4320, 5120, 7680];
 
 pub const VIDEO_CODECS: &[&str] = &[
@@ -167,23 +169,52 @@ pub const DELIMITERS: &[(char, char)] = &[
     ('\u{FF08}', '\u{FF09}'), // （）
 ];
 
-/// Get all language codes for matching (sorted by length descending)
-pub fn language_codes() -> Vec<&'static str> {
-    let mut codes: Vec<&str> = NORMALIZED_LANGUAGES.iter().map(|l| l.code).collect();
+/// Decimal spellings of [`RESOLUTIONS`], in the same order. Precomputed because
+/// the resolution parser runs at every character position and formatting these
+/// on the fly allocated a `String` per candidate.
+pub const RESOLUTION_STRS: &[&str] = &[
+    "320", "480", "540", "640", "720", "1080", "1440", "2160", "2880", "4320", "5120", "7680",
+];
+
+/// Sorts by length descending so a short code cannot shadow a longer one that
+/// starts with it.
+fn by_length_desc(mut codes: Vec<&'static str>) -> Vec<&'static str> {
     codes.sort_by(|a, b| b.len().cmp(&a.len()));
     codes
+}
+
+/// All three lists below are consulted at every character position while
+/// scanning a name, so they are built once rather than allocated and sorted per
+/// call. That alone was the bulk of parse time.
+///
+/// Get all language codes for matching (sorted by length descending)
+pub fn language_codes() -> &'static [&'static str] {
+    static CODES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    CODES.get_or_init(|| by_length_desc(NORMALIZED_LANGUAGES.iter().map(|l| l.code).collect()))
 }
 
 /// Get all subtitle language codes for matching (sorted by length descending)
-pub fn subtitle_language_codes() -> Vec<&'static str> {
-    let mut codes: Vec<&str> = NORMALIZED_SUBTITLE_LANGUAGES.iter().map(|l| l.code).collect();
-    codes.sort_by(|a, b| b.len().cmp(&a.len()));
-    codes
+pub fn subtitle_language_codes() -> &'static [&'static str] {
+    static CODES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    CODES.get_or_init(|| {
+        by_length_desc(NORMALIZED_SUBTITLE_LANGUAGES.iter().map(|l| l.code).collect())
+    })
 }
 
 /// Get all source term keys (sorted by length descending)
-pub fn source_term_keys() -> Vec<&'static str> {
-    let mut keys: Vec<&str> = SOURCE_TERMS.iter().map(|(k, _)| *k).collect();
-    keys.sort_by(|a, b| b.len().cmp(&a.len()));
-    keys
+pub fn source_term_keys() -> &'static [&'static str] {
+    static KEYS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    KEYS.get_or_init(|| by_length_desc(SOURCE_TERMS.iter().map(|(k, _)| *k).collect()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `RESOLUTION_STRS` mirrors `RESOLUTIONS` and has to stay in step with it.
+    #[test]
+    fn resolution_spellings_match_the_numbers() {
+        let spelled: Vec<String> = RESOLUTIONS.iter().map(|r| r.to_string()).collect();
+        assert_eq!(spelled, RESOLUTION_STRS);
+    }
 }

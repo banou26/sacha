@@ -93,8 +93,22 @@ fn digits1(input: &str) -> IResult<&str, &str> {
 // Term matchers - try each term from a list (longest first)
 // ---------------------------------------------------------------------------
 
+/// True when `term` could start at `input`, judged on the first byte alone.
+/// The scan tries every term list at every character position, so rejecting on
+/// one byte before sub-slicing and comparing the whole term is worth doing.
+#[inline]
+fn first_byte_matches(term: &str, input: &str) -> bool {
+    match (input.as_bytes().first(), term.as_bytes().first()) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    }
+}
+
 fn match_term_icase<'a>(terms: &'static [&'static str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
+        if !first_byte_matches(term, input) {
+            continue;
+        }
         if let Ok(result) = istr(term)(input) {
             return Ok(result);
         }
@@ -104,6 +118,9 @@ fn match_term_icase<'a>(terms: &'static [&'static str], input: &'a str) -> IResu
 
 fn match_term_exact<'a>(terms: &'static [&'static str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
+        if !first_byte_matches(term, input) {
+            continue;
+        }
         if let Ok(result) = tag::<&str, &str, nom::error::Error<&str>>(*term)(input) {
             return Ok(result);
         }
@@ -116,6 +133,9 @@ fn match_term_exact<'a>(terms: &'static [&'static str], input: &'a str) -> IResu
 /// title.
 fn match_term_list_exact<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
+        if !first_byte_matches(term, input) {
+            continue;
+        }
         if input.get(..term.len()) == Some(*term) {
             return Ok((&input[term.len()..], &input[..term.len()]));
         }
@@ -125,6 +145,9 @@ fn match_term_list_exact<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str,
 
 fn match_term_list_icase<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str, &'a str> {
     for term in terms {
+        if !first_byte_matches(term, input) {
+            continue;
+        }
         // `get` rather than `[..]`, for the same char-boundary reason as `istr`
         let Some(head) = input.get(..term.len()) else { continue };
         if head.eq_ignore_ascii_case(term) {
@@ -139,20 +162,12 @@ fn match_term_list_icase<'a>(terms: &[&str], input: &'a str) -> IResult<&'a str,
 // ---------------------------------------------------------------------------
 
 fn resolution_number(input: &str) -> IResult<&str, &str> {
-    for res in RESOLUTIONS {
-        let s = itoa_buf(*res);
-        if input.starts_with(s.as_str()) {
-            let len = s.len();
-            return Ok((&input[len..], &input[..len]));
+    for s in RESOLUTION_STRS {
+        if input.starts_with(s) {
+            return Ok((&input[s.len()..], &input[..s.len()]));
         }
     }
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
-}
-
-fn itoa_buf(n: u16) -> String {
-    let mut buf = String::new();
-    let _ = std::fmt::Write::write_fmt(&mut buf, format_args!("{}", n));
-    buf
 }
 
 fn resolution_primitive(input: &str) -> IResult<&str, String> {
@@ -352,8 +367,7 @@ fn parse_season_term(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 fn parse_subtitle_language(input: &str) -> IResult<&str, MetadataToken> {
-    let codes = subtitle_language_codes();
-    let (rest, v) = match_term_list_icase(&codes, input)?;
+    let (rest, v) = match_term_list_icase(subtitle_language_codes(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SubtitleLanguage, value: v.to_string() }))
 }
 
@@ -368,15 +382,13 @@ fn parse_audio_language(input: &str) -> IResult<&str, MetadataToken> {
     }
     // Language codes are written in caps in release names; matching them
     // loosely turns the `Chi` of `Kobayashi-san Chi no Maid Dragon` into Chinese
-    let codes = language_codes();
-    let (rest, v) = match_term_list_exact(&codes, input)?;
+    let (rest, v) = match_term_list_exact(language_codes(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }))
 }
 
 fn parse_source_term(input: &str) -> IResult<&str, MetadataToken> {
     // likewise caps by convention: `CR` is Crunchyroll, `Cr` is part of a word
-    let keys = source_term_keys();
-    let (rest, v) = match_term_list_exact(&keys, input)?;
+    let (rest, v) = match_term_list_exact(source_term_keys(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::SourceTerm, value: v.to_string() }))
 }
 
