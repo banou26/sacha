@@ -8,8 +8,6 @@ fn group(input: &str) -> Option<String> {
     sacha::parse(input).expect("parse").groups?.first().cloned()
 }
 
-/// A name whose title only ever appears inside brackets used to produce no
-/// title at all, because bracket text that was not metadata was discarded.
 #[test]
 fn recovers_a_title_that_only_exists_inside_brackets() {
     let t = titles("[FLsnow][名探偵プリキュア！/Star Detective Precure！][1080p][27][CHS&JPN]");
@@ -23,8 +21,6 @@ fn recovers_a_title_that_only_exists_inside_brackets() {
     );
 }
 
-/// Cross-language aliases live in trailing brackets and are what let a search
-/// match a release whose main title is in another script.
 #[test]
 fn keeps_a_bracketed_alias_as_a_second_title() {
     let t = titles(
@@ -36,18 +32,13 @@ fn keeps_a_bracketed_alias_as_a_second_title() {
 
 #[test]
 fn drops_annotations_hashes_and_joined_terms() {
-    // a bracket holding only a note names nothing
     assert_eq!(titles("[whomst] Cyberpunk: Edgerunners (subs only)"), ["Cyberpunk: Edgerunners"]);
-    // a CRC32 stamp reads as letters but is not a name
     let t = titles("[SubsPlease] Shingeki no Kyojin Movie (1080p) [40DD2396]");
     assert_eq!(t, ["Shingeki no Kyojin Movie"], "got {t:?}");
-    // `HEVC-10bit` is two terms joined by punctuation
     let t = titles("[LoliHouse] Girls Band Cry [BDRip 1080p HEVC-10bit FLAC]");
     assert_eq!(t, ["Girls Band Cry"], "got {t:?}");
 }
 
-/// The joined-term split only fires when every piece is metadata, so an
-/// ordinary hyphenated title keeps its hyphen.
 #[test]
 fn does_not_split_a_hyphenated_title() {
     for name in [
@@ -62,19 +53,14 @@ fn does_not_split_a_hyphenated_title() {
     }
 }
 
-/// A hyphen inside a title is not a release-group marker: only a tag at the end
-/// of the name is. `Kobayashi-san Chi no Maid Dragon` used to come apart into
-/// titles `["Kobayashi", "no Maid Dragon"]` with group `san`.
 #[test]
 fn keeps_an_honorific_attached_to_the_title() {
     let r = sacha::parse("[Erai-raws] Kobayashi-san Chi no Maid Dragon [1080p][MultiSub]").unwrap();
     assert_eq!(r.titles.as_deref(), Some(&["Kobayashi-san Chi no Maid Dragon".to_string()][..]));
     assert_eq!(r.groups.as_deref(), Some(&["Erai-raws".to_string()][..]));
-    // `Chi` is a word here, not the CHI language tag
     assert_eq!(r.audio_language_terms, None);
 }
 
-/// A trailing group tag still parses, including when a version follows it.
 #[test]
 fn still_reads_a_trailing_group_tag() {
     let r = sacha::parse("Digimon Beatbreak S01E41 1080p WEBRip x265-Rapta").unwrap();
@@ -93,7 +79,6 @@ fn classifies_streaming_sources_and_disc_types() {
     assert_eq!(r.resolution_terms.as_deref(), Some(&["4K".to_string()][..]));
 }
 
-/// Scene releases separate words with dots; the title has to come out spaced.
 #[test]
 fn splits_a_scene_release_title() {
     let t = titles("Shingeki.no.Kyojin.The.Last.Attack.Movie.2024.1080p.BDRip.x264-KuroNeko");

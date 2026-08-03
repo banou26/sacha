@@ -1,27 +1,14 @@
 //! Separator normalization.
 //!
-//! Scene releases write word boundaries as `.` or `_` rather than spaces:
+//! Scene releases write word boundaries as `.` or `_` (`Shingeki.no.Kyojin...`, `[WZF]Shingeki_no_Kyojin...`); the tokenizer recognizes nothing without a space in sight, so the dominant separator is converted to a space up front.
 //!
-//! ```text
-//! Shingeki.no.Kyojin.The.Last.Attack.Movie.2024.1080p.BDRip.x264
-//! [WZF]Shingeki_no_Kyojin_Season_3_-_01-06[HD][X264-AAC]
-//! ```
-//!
-//! The tokenizer keys metadata terms off whitespace, so without a space in
-//! sight it recognizes nothing and the entire name collapses into one title.
-//! Converting the dominant separator to a space up front fixes that.
-//!
-//! A dot is only a separator sometimes: `H.264`, `DDP5.1` and `13.5` all keep
-//! theirs. Those are detected and left alone, and the substitution only happens
-//! when the name really is separator-delimited rather than space-delimited.
+//! A dot is only a separator sometimes: `H.264`, `DDP5.1` and `13.5` all keep theirs.
 
 use std::borrow::Cow;
 
 use crate::common::{AUDIO_CODECS, CONTAINER_TERMS, VIDEO_CODECS};
 
-/// Byte ranges covered by a known term that spells a dot, such as `H.264` or
-/// `DDP5.1`. Driving this off the term lists rather than the shape of the text
-/// is what tells `H.264` apart from `B.44`, which look identical.
+/// Driving this off the term lists rather than the shape of the text is what tells `H.264` apart from `B.44`, which look identical.
 fn term_ranges(input: &str) -> Vec<(usize, usize)> {
     // ASCII-only lowercasing keeps byte offsets aligned with `input`
     let haystack = input.to_ascii_lowercase();
@@ -43,12 +30,7 @@ fn term_ranges(input: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// True when the dot at `idx` carries meaning and must survive: it belongs to a
-/// known term, or it sits inside a short numeric group (`5.1`, `13.5`,
-/// `44.1kHz`, `2022.09.18`).
-///
-/// The length of the digit run after the dot is what separates a channel count
-/// from a separator: `AAC2.0` keeps its dot, `2024.1080p` does not.
+/// The length of the digit run after the dot is what separates a channel count from a separator: `AAC2.0` keeps its dot, `2024.1080p` does not.
 fn is_load_bearing_dot(bytes: &[u8], idx: usize, terms: &[(usize, usize)]) -> bool {
     if terms.iter().any(|&(s, e)| idx >= s && idx < e) {
         return true;
@@ -63,7 +45,6 @@ fn is_load_bearing_dot(bytes: &[u8], idx: usize, terms: &[(usize, usize)]) -> bo
             .is_some_and(|i| bytes[i].is_ascii_digit())
 }
 
-/// Byte offsets of every dot that looks like a word separator.
 fn separator_dots(input: &str) -> Vec<usize> {
     let bytes = input.as_bytes();
     let terms = term_ranges(input);
@@ -74,14 +55,7 @@ fn separator_dots(input: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Rewrites word separators to spaces. Returns the input unchanged when there
-/// is nothing to rewrite.
-///
-/// Every separator dot is rewritten rather than only those in a name that looks
-/// dot-delimited overall. Names mix the two styles freely, as in
-/// `[Johker] Shingeki No Kyojin (Fan-Kaï) 1-23 - 1080p.MULTI.VF/VOSTFR.x264`,
-/// where a dotted metadata tail hangs off a spaced title. Judging the name as a
-/// whole leaves that tail stuck together.
+/// Every separator dot is rewritten rather than only those in a name that looks dot-delimited overall: names mix the two styles freely.
 pub fn normalize_separators(input: &str) -> Cow<'_, str> {
     let dots = separator_dots(input);
     let underscores = input.contains('_');
@@ -127,7 +101,6 @@ mod tests {
 
     #[test]
     fn keeps_codec_and_channel_dots() {
-        // the dot is part of the term in every one of these
         assert_eq!(normalize_separators("A.B.C.H.264.D.E.F"), "A B C H.264 D E F");
         assert_eq!(
             normalize_separators("Show.Name.2024.DDP5.1.H.265.AAC2.0.x264"),
@@ -159,7 +132,6 @@ mod tests {
         }
     }
 
-    /// A dotted metadata tail on an otherwise spaced name still has to split.
     #[test]
     fn splits_a_dotted_tail_on_a_spaced_name() {
         assert_eq!(
@@ -173,7 +145,6 @@ mod tests {
         assert_eq!(normalize_separators(""), "");
         assert_eq!(normalize_separators("."), " ");
         assert_eq!(normalize_separators("進撃の巨人.2024.1080p"), "進撃の巨人 2024 1080p");
-        // a dot after a multi-byte char is still a separator
         assert_eq!(normalize_separators("Henshū.Fan.Kaï.1080p"), "Henshū Fan Kaï 1080p");
     }
 }

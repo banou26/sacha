@@ -1,8 +1,6 @@
 use std::sync::OnceLock;
 
-/// The numeric source of truth for [`RESOLUTION_STRS`], which is what the
-/// parser actually reads. Only the drift test between the two consults this, so
-/// it is dead outside tests by design.
+/// The numeric source of truth for [`RESOLUTION_STRS`]. Only the drift test between the two consults this, so it is dead outside tests by design.
 #[allow(dead_code)]
 pub const RESOLUTIONS: &[u16] = &[320, 480, 540, 640, 720, 1080, 1440, 2160, 2880, 4320, 5120, 7680];
 
@@ -23,7 +21,6 @@ pub const VIDEO_CODECS: &[&str] = &[
 ];
 
 pub const AUDIO_CODECS: &[&str] = &[
-    // sorted by length descending
     "FLACX4", "FLACX3", "FLACX2",
     "AACX4", "AACX3", "AACX2",
     "E-AC-3",
@@ -47,8 +44,7 @@ pub const VIDEO_TERMS: &[&str] = &[
 ];
 
 pub const TYPE_TERMS: &[&str] = &[
-    // sorted by length descending: the matcher takes the first hit, so "BD"
-    // must not shadow "BDRip"
+    // sorted by length descending: the matcher takes the first hit, so "BD" must not shadow "BDRip"
     "BDRemux", "HDTVRip",
     "Blu-Ray", "Blu-ray",
     "BluRay", "BDRip", "DVDRip", "WEB-DL", "WEBRip",
@@ -69,7 +65,6 @@ pub const SUBTITLE_TERMS: &[&str] = &[
     "subtitle",
 ];
 
-/// Resolutions written as a shorthand rather than a line count.
 pub const RESOLUTION_ALIASES: &[&str] = &["4320p", "2160p", "8K", "4K", "2K"];
 
 pub const BATCH_TERMS: &[&str] = &[
@@ -152,9 +147,7 @@ pub const SOURCE_TERMS: &[(&str, &str)] = &[
     ("IQ", "iQIYI"),
 ];
 
-/// Annotations that occupy a bracket on their own. They read as words but name
-/// nothing, so they are dropped rather than kept as titles. Matched against the
-/// whole bracket content, case-insensitively, never as a substring.
+/// Matched against the whole bracket content, case-insensitively, never as a substring.
 pub const NOTE_TERMS: &[&str] = &[
     "subs only", "sub only", "subbed", "dubbed", "hardsub", "hardsubs",
     "softsub", "softsubs", "eng sub", "eng subs", "no subs", "raw", "raws",
@@ -173,31 +166,22 @@ pub const DELIMITERS: &[(char, char)] = &[
     ('\u{FF08}', '\u{FF09}'), // （）
 ];
 
-/// Decimal spellings of [`RESOLUTIONS`], in the same order. Precomputed because
-/// the resolution parser runs at every character position and formatting these
-/// on the fly allocated a `String` per candidate.
+// precomputed rather than formatted from `RESOLUTIONS` on the fly: the resolution parser runs at every character position and `to_string()` allocated a `String` per candidate
 pub const RESOLUTION_STRS: &[&str] = &[
     "320", "480", "540", "640", "720", "1080", "1440", "2160", "2880", "4320", "5120", "7680",
 ];
 
-/// Sorts by length descending so a short code cannot shadow a longer one that
-/// starts with it.
 fn by_length_desc(mut codes: Vec<&'static str>) -> Vec<&'static str> {
     codes.sort_by(|a, b| b.len().cmp(&a.len()));
     codes
 }
 
-/// All three lists below are consulted at every character position while
-/// scanning a name, so they are built once rather than allocated and sorted per
-/// call. That alone was the bulk of parse time.
-///
-/// Get all language codes for matching (sorted by length descending)
+// the three lists below are `OnceLock`-cached because all three are consulted at every character position while scanning a name, and allocating and sorting them per call was the bulk of parse time; do not go back to building them per call
 pub fn language_codes() -> &'static [&'static str] {
     static CODES: OnceLock<Vec<&'static str>> = OnceLock::new();
     CODES.get_or_init(|| by_length_desc(NORMALIZED_LANGUAGES.iter().map(|l| l.code).collect()))
 }
 
-/// Get all subtitle language codes for matching (sorted by length descending)
 pub fn subtitle_language_codes() -> &'static [&'static str] {
     static CODES: OnceLock<Vec<&'static str>> = OnceLock::new();
     CODES.get_or_init(|| {
@@ -205,7 +189,6 @@ pub fn subtitle_language_codes() -> &'static [&'static str] {
     })
 }
 
-/// Get all source term keys (sorted by length descending)
 pub fn source_term_keys() -> &'static [&'static str] {
     static KEYS: OnceLock<Vec<&'static str>> = OnceLock::new();
     KEYS.get_or_init(|| by_length_desc(SOURCE_TERMS.iter().map(|(k, _)| *k).collect()))
@@ -215,15 +198,12 @@ pub fn source_term_keys() -> &'static [&'static str] {
 mod tests {
     use super::*;
 
-    /// `RESOLUTION_STRS` mirrors `RESOLUTIONS` and has to stay in step with it.
     #[test]
     fn resolution_spellings_match_the_numbers() {
         let spelled: Vec<String> = RESOLUTIONS.iter().map(|r| r.to_string()).collect();
         assert_eq!(spelled, RESOLUTION_STRS);
     }
 
-    /// Every list reached by a bucketed matcher, and whether it is matched
-    /// case-sensitively.
     fn indexed_lists() -> Vec<(&'static str, Vec<&'static str>, bool)> {
         vec![
             ("TYPE_TERMS", TYPE_TERMS.to_vec(), false),
@@ -246,9 +226,7 @@ mod tests {
         ]
     }
 
-    /// An empty term would match at every position. Nothing else stops one from
-    /// being added, and the bucketed matchers would silently skip it where the
-    /// old full scan matched it, so the absence is asserted rather than assumed.
+    // an empty term would match at every position, and the bucketed matchers would silently skip it where the old full scan matched it; nothing else stops one from being added, so the absence is asserted rather than assumed
     #[test]
     fn no_term_list_contains_an_empty_string() {
         for (name, terms, _) in indexed_lists() {
@@ -259,9 +237,6 @@ mod tests {
         }
     }
 
-    /// A bucket has to hold exactly the terms a full scan would have considered,
-    /// in the order the list declares them. That is what makes bucketing produce
-    /// the same winner as scanning, so the parser's output does not shift.
     #[test]
     fn buckets_match_a_full_scan_in_order() {
         for (name, terms, case_sensitive) in indexed_lists() {
@@ -270,7 +245,6 @@ mod tests {
             } else {
                 TermIndex::icase(&terms)
             };
-            // every ASCII first byte, which is all a term can start with here
             for byte in 0u8..128 {
                 let probe = String::from_utf8(vec![byte, b'x']).unwrap();
                 let expected: Vec<&str> = terms
@@ -291,19 +265,13 @@ mod tests {
                     "{name} bucket for byte {byte} diverges from a full scan"
                 );
             }
-            // a multi-byte character leads with a byte no ASCII term can carry
             assert!(index.candidates("進撃の巨人").is_empty(), "{name} matched a CJK lead byte");
             assert!(index.candidates("").is_empty(), "{name} matched empty input");
         }
     }
 }
 
-/// A term list bucketed by the first byte of each term.
-///
-/// The matchers are called at nearly every character position, and each one
-/// used to walk its whole list to reject on the first byte. Bucketing turns
-/// that scan into an index: only the terms that can possibly match are visited,
-/// in their original relative order, so the term that wins is unchanged.
+/// A term list bucketed by the first byte of each term, visited in their original relative order so the term that wins is unchanged.
 pub struct TermIndex {
     flat: Vec<&'static str>,
     offsets: [u32; 257],
@@ -335,8 +303,7 @@ impl TermIndex {
             acc += counts[b];
         }
         offsets[256] = acc;
-        // counting sort, filling each bucket left to right, which keeps the
-        // terms in the order the original list declared them
+        // counting sort, filling each bucket left to right, which keeps the terms in the order the original list declared them
         let mut cursor = offsets;
         let mut flat = vec![""; terms.len()];
         for t in terms {
@@ -347,7 +314,6 @@ impl TermIndex {
         Self { flat, offsets, case_sensitive }
     }
 
-    /// The terms that could start at `input`, in declaration order.
     #[inline]
     pub fn candidates(&self, input: &str) -> &[&'static str] {
         let Some(&b) = input.as_bytes().first() else {

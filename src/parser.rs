@@ -10,12 +10,9 @@ use nom::{
 
 use crate::common::*;
 
-/// Case-insensitive tag match: matches the input against the pattern ignoring case,
-/// but returns the original text from the input (preserving original casing).
 fn istr<'a>(pattern: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     move |input: &'a str| {
-        // `get` rather than `[..]`: pattern lengths are byte counts, so a multi-byte
-        // char straddling `pat_len` would panic on a direct slice
+        // `get` rather than `[..]`: a multi-byte char straddling `pattern.len()` would panic
         let Some(head) = input.get(..pattern.len()) else {
             return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
         };
@@ -26,10 +23,6 @@ fn istr<'a>(pattern: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Token types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetadataKind {
@@ -65,10 +58,6 @@ enum RootToken {
     Data(String),
 }
 
-// ---------------------------------------------------------------------------
-// Primitive parsers
-// ---------------------------------------------------------------------------
-
 fn is_whitespace(c: char) -> bool {
     c == ' ' || c == '\t'
 }
@@ -89,13 +78,6 @@ fn digits1(input: &str) -> IResult<&str, &str> {
     take_while1(|c: char| c.is_ascii_digit())(input)
 }
 
-// ---------------------------------------------------------------------------
-// Term matchers - try each term from a list (longest first)
-// ---------------------------------------------------------------------------
-
-/// Finds the first term in `idx` that starts at `input`, ignoring case.
-/// Only the bucket sharing the input's first byte is visited, so the term that
-/// wins is the same one the full scan would have found.
 fn match_indexed_icase<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
     for term in idx.candidates(input) {
         if let Ok(result) = istr(term)(input) {
@@ -105,7 +87,6 @@ fn match_indexed_icase<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, 
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
-/// Case-sensitive counterpart of `match_indexed_icase`.
 fn match_indexed_exact<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
     for term in idx.candidates(input) {
         if input.get(..term.len()) == Some(*term) {
@@ -114,10 +95,6 @@ fn match_indexed_exact<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, 
     }
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
-
-// ---------------------------------------------------------------------------
-// Resolution parser: e.g. "1080p", "1080px", "1080", "1080x720p"
-// ---------------------------------------------------------------------------
 
 fn resolution_number(input: &str) -> IResult<&str, &str> {
     for s in RESOLUTION_STRS {
@@ -130,25 +107,20 @@ fn resolution_number(input: &str) -> IResult<&str, &str> {
 
 fn resolution_primitive(input: &str) -> IResult<&str, String> {
     let (rest, num) = resolution_number(input)?;
-    // try "px" suffix
     if let Ok((rest2, sfx)) = istr("px")(rest) {
         return Ok((rest2, format!("{}{}", num, sfx)));
     }
-    // try "p" suffix
     if let Ok((rest2, sfx)) = istr("p")(rest) {
         return Ok((rest2, format!("{}{}", num, sfx)));
     }
-    // bare number
     Ok((rest, num.to_string()))
 }
 
 fn resolution_token(input: &str) -> IResult<&str, String> {
-    // shorthand such as `4K` carries no line count for `resolution_number`
     if let Ok((rest, alias)) = match_indexed_icase(ix_resolution_aliases(), input) {
         return Ok((rest, alias.to_string()));
     }
     let (rest, first) = resolution_primitive(input)?;
-    // try "x" separator for e.g. "1080x720p"
     if let Ok((rest2, _)) = istr("x")(rest) {
         if let Ok((rest3, second)) = resolution_primitive(rest2) {
             return Ok((rest3, format!("{}x{}", first, second)));
@@ -157,19 +129,11 @@ fn resolution_token(input: &str) -> IResult<&str, String> {
     Ok((rest, first))
 }
 
-// ---------------------------------------------------------------------------
-// Version parser: "v1", "V2", etc.
-// ---------------------------------------------------------------------------
-
 fn version_token(input: &str) -> IResult<&str, String> {
     let (rest, v) = satisfy(|c| c == 'v' || c == 'V')(input)?;
     let (rest, d) = digit_char(rest)?;
     Ok((rest, format!("{}{}", v, d)))
 }
-
-// ---------------------------------------------------------------------------
-// Date parser: "2022", "2022.01.15", "15.01.2022"
-// ---------------------------------------------------------------------------
 
 fn four_digits(input: &str) -> IResult<&str, &str> {
     take_while_m_n(4, 4, |c: char| c.is_ascii_digit())(input)
@@ -180,7 +144,6 @@ fn two_digits(input: &str) -> IResult<&str, &str> {
 }
 
 fn date_token(input: &str) -> IResult<&str, String> {
-    // try YYYY.MM.DD
     if let Ok((rest, result)) = recognize(tuple((
         four_digits,
         char('.'),
@@ -190,7 +153,6 @@ fn date_token(input: &str) -> IResult<&str, String> {
     )))(input) {
         return Ok((rest, result.to_string()));
     }
-    // try DD.MM.YYYY
     if let Ok((rest, result)) = recognize(tuple((
         two_digits,
         char('.'),
@@ -200,14 +162,9 @@ fn date_token(input: &str) -> IResult<&str, String> {
     )))(input) {
         return Ok((rest, result.to_string()));
     }
-    // bare year (4 digits)
     let (rest, y) = four_digits(input)?;
     Ok((rest, y.to_string()))
 }
-
-// ---------------------------------------------------------------------------
-// Episode range parser: "01 ~ 10", "01-10", "01 - 10"
-// ---------------------------------------------------------------------------
 
 fn episode_token(input: &str) -> IResult<&str, String> {
     let (rest, start) = digits1(input)?;
@@ -217,10 +174,6 @@ fn episode_token(input: &str) -> IResult<&str, String> {
     let (rest, end) = digits1(rest)?;
     Ok((rest, format!("{} {} {}", start, sep, end)))
 }
-
-// ---------------------------------------------------------------------------
-// Season parser: "Season 01", "S01"
-// ---------------------------------------------------------------------------
 
 fn season_token(input: &str) -> IResult<&str, String> {
     let (rest, part) = match_indexed_icase(ix_season_part_terms(), input)?;
@@ -232,23 +185,16 @@ fn season_token(input: &str) -> IResult<&str, String> {
     Ok((rest, format!("{}{}", part, trimmed_end)))
 }
 
-// ---------------------------------------------------------------------------
-// Non-delimited group: "-GroupName" at end of string or before space/dot
-// ---------------------------------------------------------------------------
-
 fn non_delimited_group(input: &str) -> IResult<&str, String> {
     let (rest, _) = char('-')(input)?;
     let (rest, name) = take_while1(|c: char| c != '.' && !is_whitespace(c) && !is_closing_delim(c))(rest)?;
     if name.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
     }
-    // A group tag is the tail of the name, as in `x265-Rapta` or
-    // `-VARYG (Shingeki no Kyojin)`. Requiring that keeps the honorific in
-    // `Kobayashi-san Chi no Maid Dragon` attached to the title.
+    // a group tag is the tail of the name: this keeps the honorific in `Kobayashi-san Chi no Maid Dragon` attached to the title
     let tail = rest.trim_start_matches(|c: char| is_whitespace(c));
     let ends_the_name = tail.is_empty()
         || tail.starts_with(|c: char| is_opening_delim(c) || is_closing_delim(c))
-        // `VOSTFR-LTPD v2` puts a version after the group tag
         || parse_version(tail).is_ok()
         || try_metadata_token(tail).is_ok();
     if !ends_the_name {
@@ -264,10 +210,6 @@ fn is_closing_delim(c: char) -> bool {
 fn is_opening_delim(c: char) -> bool {
     DELIMITERS.iter().any(|(open, _)| *open == c)
 }
-
-// ---------------------------------------------------------------------------
-// Metadata token matchers - each returns a MetadataToken
-// ---------------------------------------------------------------------------
 
 fn parse_version(input: &str) -> IResult<&str, MetadataToken> {
     let (rest, v) = version_token(input)?;
@@ -330,16 +272,13 @@ fn parse_subtitle_language(input: &str) -> IResult<&str, MetadataToken> {
 }
 
 fn parse_audio_language(input: &str) -> IResult<&str, MetadataToken> {
-    // Try audio language terms first (case insensitive) - these are longer
     if let Ok((rest, v)) = match_indexed_icase(ix_audio_language_terms(), input) {
         return Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }));
     }
-    // Try case-sensitive terms
     if let Ok((rest, v)) = match_indexed_exact(ix_audio_language_exact(), input) {
         return Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }));
     }
-    // Language codes are written in caps in release names; matching them
-    // loosely turns the `Chi` of `Kobayashi-san Chi no Maid Dragon` into Chinese
+    // language codes are caps by convention: matching loosely turns the `Chi` of `Kobayashi-san Chi no Maid Dragon` into Chinese
     let (rest, v) = match_indexed_exact(ix_language_codes(), input)?;
     Ok((rest, MetadataToken { kind: MetadataKind::AudioLanguage, value: v.to_string() }))
 }
@@ -365,14 +304,9 @@ fn parse_group_from_hyphen(input: &str) -> IResult<&str, MetadataToken> {
     Ok((rest, MetadataToken { kind: MetadataKind::Group, value: v }))
 }
 
-// ---------------------------------------------------------------------------
-// Ordered metadata token attempt - matches the TypeScript ordering
-// ---------------------------------------------------------------------------
-
-/// The ordered list of metadata parsers tried inside delimited blocks.
 /// Order matters: longer/more-specific patterns must come before shorter ones.
 fn try_metadata_token(input: &str) -> IResult<&str, MetadataToken> {
-    // Same order as the TypeScript metadataTokenValue array
+    // same order as the TypeScript implementation's `metadataTokenValue` array; keep the two in step
     alt((
         parse_version,
         parse_type_term,
@@ -396,10 +330,6 @@ fn try_metadata_token(input: &str) -> IResult<&str, MetadataToken> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Delimited metadata block: [content], (content), {content}, etc.
-// ---------------------------------------------------------------------------
-
 fn parse_delimited_block(input: &str) -> IResult<&str, RootToken> {
     for &(open, close) in DELIMITERS {
         if let Ok((rest, tokens)) = parse_one_delimited(input, open, close) {
@@ -412,7 +342,6 @@ fn parse_delimited_block(input: &str) -> IResult<&str, RootToken> {
 fn parse_one_delimited<'a>(input: &'a str, open: char, close: char) -> IResult<&'a str, RootToken> {
     let (rest, _) = char(open)(input)?;
 
-    // Extract everything up to the matching close delimiter
     let close_pos = rest.find(close).ok_or_else(|| {
         nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))
     })?;
@@ -420,21 +349,16 @@ fn parse_one_delimited<'a>(input: &'a str, open: char, close: char) -> IResult<&
     let inner = &rest[..close_pos];
     let after_close = &rest[close_pos + close.len_utf8()..];
 
-    // Parse the inner content for metadata tokens
     let tokens = parse_inner_metadata(inner);
 
     Ok((after_close, RootToken::Metadata(tokens)))
 }
 
-/// Characters that join two metadata terms inside one bracket, as in
-/// `HEVC-10bit` or `CHS/CHT`.
 fn is_term_joiner(c: char) -> bool {
     matches!(c, '-' | '/' | '&' | ',' | '+' | '_' | '|') || is_whitespace(c)
 }
 
-/// Reads `text` as a run of metadata terms separated by punctuation, returning
-/// the tokens only when the whole of it is accounted for. A single leftover
-/// word makes it a title instead, so this never eats a name.
+/// Returns tokens only when the whole of `text` is accounted for: a single leftover word makes it a title instead.
 fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
     let mut rest = text.trim();
     if rest.is_empty() {
@@ -447,8 +371,7 @@ fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
             break;
         }
         let (next, token) = try_metadata_token(rest).ok()?;
-        // the term has to end where a joiner or the text does, so `WEB` cannot
-        // claim the front of `WEBHOOK`
+        // the term has to end where a joiner or the text does, so `WEB` cannot claim the front of `WEBHOOK`
         if !next.is_empty() && !next.starts_with(is_term_joiner) {
             return None;
         }
@@ -458,11 +381,7 @@ fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
     (!tokens.is_empty()).then_some(tokens)
 }
 
-/// Text left over inside a delimited block once the metadata is taken out is
-/// worth keeping only when it could be a name. Episode counts, language tags
-/// and CRC32 stamps are not.
-/// A checksum such as `91ABD6D7` or `40DD2396`: hex digits only, and long
-/// enough that a short word like `dead` cannot be mistaken for one.
+/// A checksum such as `91ABD6D7`: hex digits only, and long enough that a short word like `dead` cannot be mistaken for one.
 fn is_hex_stamp(text: &str) -> bool {
     text.len() >= 6
         && text.chars().all(|c| c.is_ascii_hexdigit())
@@ -476,24 +395,14 @@ fn is_title_like(text: &str) -> bool {
     if is_hex_stamp(text) {
         return false;
     }
-    // a bracket holding only an annotation, as in `(subs only)`
     if NOTE_TERMS.iter().any(|n| text.eq_ignore_ascii_case(n)) {
         return false;
     }
     true
 }
 
-/// Parse the content inside delimiters, extracting metadata tokens and keeping
-/// the text between them.
-///
-/// Bracketed text that is not metadata is usually a title or an alias of one:
-/// `[名探偵プリキュア！/Star Detective Precure！]` is the only title that name
-/// carries, and `(Shingeki no Kyojin)` is the romaji alias of a Cyrillic title.
-/// Both used to be discarded a character at a time.
 fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
-    // A bracket holding just a CRC32 stamp has to be rejected whole. Tokenizing
-    // it lets the date parser claim the `2396` of `40DD2396` and strand `40DD`
-    // as a title.
+    // a CRC32 stamp has to be rejected whole: tokenizing it lets the date parser claim the `2396` of `40DD2396`
     if is_hex_stamp(input.trim()) {
         return Vec::new();
     }
@@ -504,9 +413,6 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
     fn flush(pending: &mut String, tokens: &mut Vec<MetadataToken>) {
         let text = trim_non_word(pending);
         pending.clear();
-        // `HEVC-10bit` is two terms joined by punctuation, not a name. Accepting
-        // the split only when every piece is metadata keeps a real title such as
-        // `Web-Shooter` intact.
         if let Some(mut inner) = all_metadata(&text) {
             tokens.append(&mut inner);
         } else if is_title_like(&text) {
@@ -515,7 +421,6 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
     }
 
     while !input.is_empty() {
-        // Skip leading whitespace
         if let Ok((rest, ws_text)) = ws(input) {
             pending.push_str(ws_text);
             input = rest;
@@ -524,10 +429,7 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
             }
         }
 
-        // Try to match a metadata token
         if let Ok((rest, token)) = try_metadata_token(input) {
-            // Check that the token is followed by whitespace, end of input, or closing delim
-            // This prevents partial matches mid-word
             if rest.is_empty()
                 || rest.starts_with(|c: char| is_whitespace(c))
                 || rest.starts_with(|c: char| is_closing_delim(c))
@@ -539,7 +441,6 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
             }
         }
 
-        // Not metadata: hold the character as possible title text
         let mut chars = input.chars();
         pending.push(chars.next().unwrap());
         input = chars.as_str();
@@ -549,13 +450,6 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
     tokens
 }
 
-// ---------------------------------------------------------------------------
-// Non-delimited metadata: "-GroupName", " WEB-DL", version, container at word boundary
-// ---------------------------------------------------------------------------
-
-/// Check if position is a valid token boundary: the current match can end here
-/// because the next thing is whitespace, end, a delimiter, a hyphen (group start),
-/// or another recognizable metadata token (e.g. version immediately after season "S01v2").
 fn is_token_boundary(rest: &str) -> bool {
     if rest.is_empty() {
         return true;
@@ -564,11 +458,9 @@ fn is_token_boundary(rest: &str) -> bool {
     if is_whitespace(c) || is_opening_delim(c) || is_closing_delim(c) {
         return true;
     }
-    // '-' can start a group token
     if c == '-' {
         return true;
     }
-    // Check if remaining starts with a recognizable metadata token
     if parse_version(rest).is_ok() || try_metadata_token(rest).is_ok() {
         return true;
     }
@@ -576,32 +468,26 @@ fn is_token_boundary(rest: &str) -> bool {
 }
 
 fn parse_non_delimited_metadata(input: &str) -> IResult<&str, RootToken> {
-    // 1. group from hyphen prefix (at start or after space)
     if let Ok((rest, tok)) = parse_group_from_hyphen(input) {
         return Ok((rest, RootToken::Metadata(vec![tok])));
     }
 
-    // 2. whitespace-separated metadata term
     if let Ok((rest_ws, _)) = ws(input) {
-        // Try metadata tokens
         if let Ok((rest, tok)) = try_metadata_token(rest_ws) {
             if is_token_boundary(rest) {
                 return Ok((rest, RootToken::Metadata(vec![tok])));
             }
         }
-        // Try episode token
         if let Ok((rest, tok)) = parse_episode(rest_ws) {
             if is_token_boundary(rest) {
                 return Ok((rest, RootToken::Metadata(vec![tok])));
             }
         }
-        // Try group from hyphen
         if let Ok((rest, tok)) = parse_group_from_hyphen(rest_ws) {
             return Ok((rest, RootToken::Metadata(vec![tok])));
         }
     }
 
-    // 3. Non-separated tokens (version, container at start without space)
     if let Ok((rest, tok)) = parse_version(input) {
         return Ok((rest, RootToken::Metadata(vec![tok])));
     }
@@ -614,10 +500,6 @@ fn parse_non_delimited_metadata(input: &str) -> IResult<&str, RootToken> {
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
-// ---------------------------------------------------------------------------
-// Non-metadata (data) token: everything until a metadata token or end
-// ---------------------------------------------------------------------------
-
 fn parse_data_token(input: &str) -> IResult<&str, RootToken> {
     if input.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Eof)));
@@ -628,12 +510,10 @@ fn parse_data_token(input: &str) -> IResult<&str, RootToken> {
     while pos < input.len() {
         let remaining = &input[pos..];
 
-        // Check if a metadata token starts here
         if parse_delimited_block(remaining).is_ok() || parse_non_delimited_metadata(remaining).is_ok() {
             break;
         }
 
-        // Advance by one character
         let c = remaining.chars().next().unwrap();
         pos += c.len_utf8();
     }
@@ -644,10 +524,6 @@ fn parse_data_token(input: &str) -> IResult<&str, RootToken> {
 
     Ok((&input[pos..], RootToken::Data(input[..pos].to_string())))
 }
-
-// ---------------------------------------------------------------------------
-// Top-level token parser
-// ---------------------------------------------------------------------------
 
 fn parse_token(input: &str) -> IResult<&str, RootToken> {
     alt((
@@ -661,10 +537,6 @@ fn parse_all_tokens(input: &str) -> IResult<&str, Vec<RootToken>> {
     many1(parse_token)(input)
 }
 
-// ---------------------------------------------------------------------------
-// Post-processing: promote first single-string metadata to group
-// ---------------------------------------------------------------------------
-
 fn is_non_word(c: char) -> bool {
     c.is_ascii_punctuation() || c.is_whitespace() || c.is_control() || c.is_ascii_control()
         || matches!(c, '\u{00A0}'..='\u{00BF}') // symbols/punctuation block
@@ -673,8 +545,7 @@ fn is_non_word(c: char) -> bool {
 fn trim_non_word(s: &str) -> String {
     let trimmed = s.trim();
     let start = trimmed.find(|c: char| !is_non_word(c)).unwrap_or(0);
-    // `i + c.len_utf8()`, not `i + 1`: the index points at where the char starts,
-    // so a multi-byte trailing char would leave `end` inside it
+    // `i + c.len_utf8()`, not `i + 1`: a multi-byte trailing char would leave `end` inside it
     let end = trimmed
         .char_indices()
         .rev()
@@ -687,10 +558,6 @@ fn trim_non_word(s: &str) -> String {
         trimmed[start..end].to_string()
     }
 }
-
-// ---------------------------------------------------------------------------
-// ParseResult - the public output type
-// ---------------------------------------------------------------------------
 
 use serde::Serialize;
 
@@ -761,13 +628,8 @@ impl ParseResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public parse function
-// ---------------------------------------------------------------------------
-
 pub fn parse(input: &str) -> Result<ParseResult, String> {
-    // Scene releases delimit words with `.` or `_`; the tokenizer below needs
-    // whitespace to see word boundaries at all.
+    // separators are normalized first because scene releases delimit words with `.` or `_`; the tokenizer keys metadata off whitespace, so an unnormalized name collapses into a single title
     let normalized = crate::normalize::normalize_separators(input);
     let input = normalized.as_ref();
 
@@ -776,35 +638,22 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
 
     let mut result = ParseResult::default();
 
-    // Process tokens, mirroring the TypeScript logic:
-    // - First metadata block with a single plain string → promote to group
-    // - DATA tokens → titles (trimmed, filtered)
-    // - METADATA tokens → categorized
-
     let mut first = true;
     for token in &tokens {
         match token {
             RootToken::Metadata(items) => {
                 if first && items.is_empty() {
-                    // First token was a delimited block with no recognized metadata
-                    // The original TS code promotes this to a group when exactly 1 string
-                    // We need to handle the case where the inner content was just a plain string
-                    // This is handled below via the special first-token logic
+                    // deliberate no-op: a first delimited block with no recognized metadata is handled by the first-token logic just below
                 }
 
                 if first {
                     first = false;
-                    // A leading bracket holding nothing but text is the release
-                    // group, as in `[SubsPlease]`, so it outranks the title
-                    // reading that `parse_inner_metadata` gives it.
+                    // a leading bracket holding nothing but text is the release group, as in `[SubsPlease]`, so it outranks the title reading
                     if items.len() == 1 && items[0].kind == MetadataKind::Title {
                         result.push(&MetadataKind::Group, items[0].value.clone());
                         continue;
                     }
-                    // Special case: if first metadata block is empty (all content was
-                    // unrecognized strings inside brackets), extract the raw text as group
                     if items.is_empty() {
-                        // Reconstruct from input: find the first delimited block content
                         if let Some(group_text) = extract_first_bracket_content(input) {
                             let trimmed = group_text.trim().to_string();
                             if !trimmed.is_empty() {
@@ -822,7 +671,6 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
             RootToken::Data(text) => {
                 first = false;
                 let trimmed = trim_non_word(text);
-                // Filter: must have at least 1 non-punctuation/non-whitespace char
                 let has_word = trimmed.chars().any(|c| !is_non_word(c));
                 if !trimmed.is_empty() && has_word {
                     result.push(&MetadataKind::Title, trimmed);
@@ -834,7 +682,6 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
     Ok(result)
 }
 
-/// Extract the content of the first bracketed section from the raw input.
 fn extract_first_bracket_content(input: &str) -> Option<String> {
     for &(open, close) in DELIMITERS {
         if input.starts_with(open) {
@@ -846,10 +693,6 @@ fn extract_first_bracket_content(input: &str) -> Option<String> {
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -885,8 +728,6 @@ mod tests {
         let r = parse("[EMBER] Cyberpunk: Edgerunners (2022) (Season 1) [WEBRip] [1080p Dual Audio HEVC 10 bits] (Cyberpunk Edgerunners) (Batch)").unwrap();
         assert_eq!(r.groups.as_deref(), Some(&["EMBER".to_string()][..]));
         assert_eq!(r.dates.as_deref(), Some(&["2022".to_string()][..]));
-        // the trailing `(Cyberpunk Edgerunners)` is an alias of the same show and
-        // is now kept as a second title candidate
         assert_eq!(
             r.titles.as_deref(),
             Some(&["Cyberpunk: Edgerunners".to_string(), "Cyberpunk Edgerunners".to_string()][..])

@@ -1,5 +1,3 @@
-//! Matching a query against parsed release names.
-
 use sacha::{Index, SearchConfig};
 
 fn names() -> Vec<String> {
@@ -30,13 +28,11 @@ fn ranks_the_right_releases_first() {
         .search(&["Shingeki no Kyojin".to_string()], SearchConfig::default())
         .unwrap();
     let matched: Vec<u32> = hits.iter().map(|h| h.index).collect();
-    // every Attack on Titan release, and neither of the other two shows
     assert!(matched.contains(&0) && matched.contains(&1) && matched.contains(&2));
     assert!(!matched.contains(&4), "Frieren should not match: {hits:?}");
     assert!(!matched.contains(&5), "Maid Dragon should not match: {hits:?}");
 }
 
-/// The point of taking a list of queries: no single alias finds every release.
 #[test]
 fn aliases_cover_releases_no_single_query_reaches() {
     let index = Index::build(&names());
@@ -49,7 +45,6 @@ fn aliases_cover_releases_no_single_query_reaches() {
         )
         .unwrap();
     assert!(both.len() >= romaji.len().max(english.len()), "{both:?}");
-    // the Cyrillic release is only reachable through its bracketed romaji alias
     assert!(both.iter().any(|h| h.index == 6), "{both:?}");
 }
 
@@ -60,7 +55,6 @@ fn scores_every_release_when_typos_are_unbounded() {
     let loose = index.search(&["Attack on Titan".to_string()], loose()).unwrap();
     assert!(loose.len() > strict.len(), "strict {strict:?}\nloose {loose:?}");
     assert_eq!(loose.len(), index.len());
-    // still ranked, not just returned
     assert!(loose[0].score > loose[loose.len() - 1].score);
 }
 
@@ -81,13 +75,11 @@ fn reports_the_matching_title_not_the_raw_name() {
         .search(&["Shingeki no Kyojin".to_string()], SearchConfig::default())
         .unwrap();
     let scene = hits.iter().find(|h| h.index == 3).expect("scene release should match");
-    // the dotted name came out spaced, and without its metadata tail
     assert!(scene.title.starts_with("Shingeki no Kyojin"), "{:?}", scene.title);
     assert!(!scene.title.contains("BDRip"), "{:?}", scene.title);
 }
 
-/// frizbee aborts on a query longer than its score can represent, which in wasm
-/// takes the module with it, so the length is checked instead.
+/// frizbee aborts on a query longer than its score can represent, which in wasm takes the module with it, so the length is checked instead.
 #[test]
 fn rejects_an_overlong_query_instead_of_aborting() {
     let index = Index::build(&names());

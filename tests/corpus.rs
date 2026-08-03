@@ -1,10 +1,7 @@
-//! Runs the parser over the checked-in corpora and over non-ASCII names that
-//! previously panicked. Every case must parse without panicking.
+//! Runs the parser over the checked-in corpora and over non-ASCII names that previously panicked.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-/// Parses `input`, turning a panic into an `Err` so one bad case does not hide
-/// the rest of the corpus.
 fn try_parse(input: &str) -> Result<(), String> {
     match catch_unwind(AssertUnwindSafe(|| sacha::parse(input))) {
         Ok(Ok(_)) => Ok(()),
@@ -41,16 +38,12 @@ fn movies_corpus_parses() {
     check_corpus("movies", include_str!("movies.txt"));
 }
 
-/// A live sample from nyaa.si across the anime, audio and live-action
-/// categories. About a third of it is non-ASCII, which the two hand-written
-/// corpora barely cover.
+// tests/nyaa.txt is a live sample from nyaa.si across the anime, audio and live-action categories; about a third of it is non-ASCII, which the two hand-written corpora barely cover
 #[test]
 fn nyaa_corpus_parses() {
     check_corpus("nyaa", include_str!("nyaa.txt"));
 }
 
-/// Every name in the corpora should yield at least one title. A name that
-/// parses but names nothing is no use to a search index.
 #[test]
 fn every_name_yields_a_title() {
     let hook = std::panic::take_hook();
@@ -75,8 +68,6 @@ fn every_name_yields_a_title() {
     );
 }
 
-/// Release names carry accented Latin, CJK and Cyrillic text. Slicing them at a
-/// byte offset derived from an ASCII pattern used to land inside a character.
 #[test]
 fn non_ascii_names_parse() {
     let names = [
@@ -89,7 +80,7 @@ fn non_ascii_names_parse() {
         "Music Collection of Attack on Titan/進撃の巨人/Shingeki no Kyojin/进击的巨人 V2.0",
         "Shingeki.no.Kyojin.Chronicle.Movie.2020.1080p.BDRip.x264 進撃の巨人 〜クロニクル〜",
         "[Furretar] 台粤配 - 进击的巨人 [國語][粵語][国语][中配版] (進擊的巨人)",
-        // the trailing word character is itself multi-byte
+        // its trailing word character is itself multi-byte; without that it looks like an ordinary ASCII name and gets pruned
         "Yuru Camp△",
         "進撃の巨人",
         "Pokémon",

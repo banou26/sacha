@@ -6,7 +6,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, '..')
 const pkgDir = resolve(root, 'pkg')
 
-// --- Patch pkg/package.json ---
 const pkgJsonPath = resolve(pkgDir, 'package.json')
 const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'))
 
@@ -51,13 +50,11 @@ Object.assign(pkg, {
 writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + '\n')
 console.log('Patched pkg/package.json')
 
-// --- Copy hand-written types into pkg/ ---
 const srcTypes = resolve(root, 'types', 'sacha.d.ts')
 const destTypes = resolve(pkgDir, 'sacha.d.ts')
 copyFileSync(srcTypes, destTypes)
 console.log('Copied types/sacha.d.ts -> pkg/sacha.d.ts')
 
-// --- Patch pkg/sacha.js to add named `init` export ---
 const sachaJsPath = resolve(pkgDir, 'sacha.js')
 let sachaJs = readFileSync(sachaJsPath, 'utf-8')
 sachaJs = sachaJs.replace(
