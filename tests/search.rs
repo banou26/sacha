@@ -1,3 +1,4 @@
+//! Matching a query against parsed release names.
 use sacha::{Index, SearchConfig};
 
 fn names() -> Vec<String> {
@@ -19,6 +20,7 @@ fn loose() -> SearchConfig {
     SearchConfig { max_typos: None, ..Default::default() }
 }
 
+/// The point of taking a list of queries: no single alias finds every release.
 #[test]
 fn ranks_the_right_releases_first() {
     let index = Index::build(&names());
@@ -33,6 +35,8 @@ fn ranks_the_right_releases_first() {
     assert!(!matched.contains(&5), "Maid Dragon should not match: {hits:?}");
 }
 
+/// frizbee aborts on a query longer than its score can represent, which in wasm
+/// takes the module with it, so the length is checked instead.
 #[test]
 fn aliases_cover_releases_no_single_query_reaches() {
     let index = Index::build(&names());

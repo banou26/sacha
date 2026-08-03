@@ -1,7 +1,10 @@
-//! Runs the parser over the checked-in corpora and over non-ASCII names that previously panicked.
+//! Runs the parser over the checked-in corpora and over non-ASCII names that
+//! previously panicked. Every case must parse without panicking.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+/// Parses `input`, turning a panic into an `Err` so one bad case does not hide
+/// the rest of the corpus.
 fn try_parse(input: &str) -> Result<(), String> {
     match catch_unwind(AssertUnwindSafe(|| sacha::parse(input))) {
         Ok(Ok(_)) => Ok(()),
@@ -28,17 +31,24 @@ fn check_corpus(label: &str, body: &str) {
     );
 }
 
+/// A live sample from nyaa.si across the anime, audio and live-action
+/// categories. About a third of it is non-ASCII, which the two hand-written
+/// corpora barely cover.
 #[test]
 fn anime_corpus_parses() {
     check_corpus("anime", include_str!("anime.txt"));
 }
 
+/// Every name in the corpora should yield at least one title. A name that
+/// parses but names nothing is no use to a search index.
 #[test]
 fn movies_corpus_parses() {
     check_corpus("movies", include_str!("movies.txt"));
 }
 
 // tests/nyaa.txt is a live sample from nyaa.si across the anime, audio and live-action categories; about a third of it is non-ASCII, which the two hand-written corpora barely cover
+/// Release names carry accented Latin, CJK and Cyrillic text. Slicing them at a
+/// byte offset derived from an ASCII pattern used to land inside a character.
 #[test]
 fn nyaa_corpus_parses() {
     check_corpus("nyaa", include_str!("nyaa.txt"));

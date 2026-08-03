@@ -23,7 +23,11 @@ export function parse(input: string): ParseResult
 export function format(input: string): ParseResult
 
 export interface SearchOptions {
-  /** Query characters allowed to go unmatched. `null` scores every entry instead of dropping those that do not contain the query in order. Defaults to 0. */
+  /**
+   * Query characters allowed to go unmatched. `null` scores every entry
+   * instead of dropping those that do not contain the query in order, which is
+   * what you want when ranking rather than filtering. Defaults to 0.
+   */
   maxTypos?: number | null
   /** Smallest score worth returning. Defaults to 1. */
   minScore?: number
@@ -42,14 +46,35 @@ export interface SearchHit {
   exact: boolean
 }
 
+/**
+ * A parsed list of release names that can be searched repeatedly.
+ *
+ * Names are parsed on construction and stay on the wasm side, so a scraped
+ * list crosses the boundary once however many queries run against it.
+ */
 export class ReleaseIndex {
   constructor(names: string[])
+  /** Number of releases in the index. */
   readonly len: number
+  /** The full parse of one release, or `undefined` when out of range. */
   parsed(index: number): ParseResult | undefined
+  /**
+   * Ranks the index against one or more aliases of the same show, best first.
+   * Pass every alias you have: a release named only `進撃の巨人` and one named
+   * only `Attack on Titan` are the same show, and no single query finds both.
+   */
   search(queries: string[], options?: SearchOptions | null): SearchHit[]
   free(): void
 }
 
+/**
+ * Parses `names` and ranks them against `queries` in one call.
+ *
+ * Equivalent to building a `ReleaseIndex` and searching it once, without a
+ * handle to keep or free. Prefer it for a list you query once and discard; keep
+ * the index when several queries run against one list, since the parse is the
+ * whole cost and the index pays it only once.
+ */
 export function searchNames(
   names: string[],
   queries: string[],

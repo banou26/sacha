@@ -10,6 +10,8 @@ use nom::{
 
 use crate::common::*;
 
+/// Case-insensitive tag match: matches the input against the pattern ignoring case,
+/// but returns the original text from the input (preserving original casing).
 fn istr<'a>(pattern: &'a str) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str> {
     move |input: &'a str| {
         // `get` rather than `[..]`: a multi-byte char straddling `pattern.len()` would panic
@@ -78,6 +80,9 @@ fn digits1(input: &str) -> IResult<&str, &str> {
     take_while1(|c: char| c.is_ascii_digit())(input)
 }
 
+/// Finds the first term in `idx` that starts at `input`, ignoring case.
+/// Only the bucket sharing the input's first byte is visited, so the term that
+/// wins is the same one the full scan would have found.
 fn match_indexed_icase<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
     for term in idx.candidates(input) {
         if let Ok(result) = istr(term)(input) {
@@ -87,6 +92,7 @@ fn match_indexed_icase<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, 
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
+/// Case-sensitive counterpart of `match_indexed_icase`.
 fn match_indexed_exact<'a>(idx: &TermIndex, input: &'a str) -> IResult<&'a str, &'a str> {
     for term in idx.candidates(input) {
         if input.get(..term.len()) == Some(*term) {
@@ -304,6 +310,7 @@ fn parse_group_from_hyphen(input: &str) -> IResult<&str, MetadataToken> {
     Ok((rest, MetadataToken { kind: MetadataKind::Group, value: v }))
 }
 
+/// The ordered list of metadata parsers tried inside delimited blocks.
 /// Order matters: longer/more-specific patterns must come before shorter ones.
 fn try_metadata_token(input: &str) -> IResult<&str, MetadataToken> {
     // same order as the TypeScript implementation's `metadataTokenValue` array; keep the two in step
@@ -354,11 +361,15 @@ fn parse_one_delimited<'a>(input: &'a str, open: char, close: char) -> IResult<&
     Ok((after_close, RootToken::Metadata(tokens)))
 }
 
+/// Characters that join two metadata terms inside one bracket, as in
+/// `HEVC-10bit` or `CHS/CHT`.
 fn is_term_joiner(c: char) -> bool {
     matches!(c, '-' | '/' | '&' | ',' | '+' | '_' | '|') || is_whitespace(c)
 }
 
-/// Returns tokens only when the whole of `text` is accounted for: a single leftover word makes it a title instead.
+/// Reads `text` as a run of metadata terms separated by punctuation, returning
+/// the tokens only when the whole of it is accounted for. A single leftover
+/// word makes it a title instead, so this never eats a name.
 fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
     let mut rest = text.trim();
     if rest.is_empty() {
@@ -381,7 +392,11 @@ fn all_metadata(text: &str) -> Option<Vec<MetadataToken>> {
     (!tokens.is_empty()).then_some(tokens)
 }
 
-/// A checksum such as `91ABD6D7`: hex digits only, and long enough that a short word like `dead` cannot be mistaken for one.
+/// Text left over inside a delimited block once the metadata is taken out is
+/// worth keeping only when it could be a name. Episode counts, language tags
+/// and CRC32 stamps are not.
+/// A checksum such as `91ABD6D7` or `40DD2396`: hex digits only, and long
+/// enough that a short word like `dead` cannot be mistaken for one.
 fn is_hex_stamp(text: &str) -> bool {
     text.len() >= 6
         && text.chars().all(|c| c.is_ascii_hexdigit())
@@ -401,6 +416,13 @@ fn is_title_like(text: &str) -> bool {
     true
 }
 
+/// Parse the content inside delimiters, extracting metadata tokens and keeping
+/// the text between them.
+///
+/// Bracketed text that is not metadata is usually a title or an alias of one:
+/// `[名探偵プリキュア！/Star Detective Precure！]` is the only title that name
+/// carries, and `(Shingeki no Kyojin)` is the romaji alias of a Cyrillic title.
+/// Both used to be discarded a character at a time.
 fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
     // a CRC32 stamp has to be rejected whole: tokenizing it lets the date parser claim the `2396` of `40DD2396`
     if is_hex_stamp(input.trim()) {
@@ -450,6 +472,9 @@ fn parse_inner_metadata(mut input: &str) -> Vec<MetadataToken> {
     tokens
 }
 
+/// Check if position is a valid token boundary: the current match can end here
+/// because the next thing is whitespace, end, a delimiter, a hyphen (group start),
+/// or another recognizable metadata token (e.g. version immediately after season "S01v2").
 fn is_token_boundary(rest: &str) -> bool {
     if rest.is_empty() {
         return true;
@@ -682,6 +707,7 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
     Ok(result)
 }
 
+/// Extract the content of the first bracketed section from the raw input.
 fn extract_first_bracket_content(input: &str) -> Option<String> {
     for &(open, close) in DELIMITERS {
         if input.starts_with(open) {

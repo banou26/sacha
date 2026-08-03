@@ -8,6 +8,8 @@ fn group(input: &str) -> Option<String> {
     sacha::parse(input).expect("parse").groups?.first().cloned()
 }
 
+/// A name whose title only ever appears inside brackets used to produce no
+/// title at all, because bracket text that was not metadata was discarded.
 #[test]
 fn recovers_a_title_that_only_exists_inside_brackets() {
     let t = titles("[FLsnow][名探偵プリキュア！/Star Detective Precure！][1080p][27][CHS&JPN]");
@@ -21,6 +23,8 @@ fn recovers_a_title_that_only_exists_inside_brackets() {
     );
 }
 
+/// Cross-language aliases live in trailing brackets and are what let a search
+/// match a release whose main title is in another script.
 #[test]
 fn keeps_a_bracketed_alias_as_a_second_title() {
     let t = titles(
@@ -30,6 +34,8 @@ fn keeps_a_bracketed_alias_as_a_second_title() {
     assert!(t.iter().any(|s| s.contains("Shingeki no Kyojin")), "got {t:?}");
 }
 
+/// The joined-term split only fires when every piece is metadata, so an
+/// ordinary hyphenated title keeps its hyphen.
 #[test]
 fn drops_annotations_hashes_and_joined_terms() {
     assert_eq!(titles("[whomst] Cyberpunk: Edgerunners (subs only)"), ["Cyberpunk: Edgerunners"]);
@@ -39,6 +45,9 @@ fn drops_annotations_hashes_and_joined_terms() {
     assert_eq!(t, ["Girls Band Cry"], "got {t:?}");
 }
 
+/// A hyphen inside a title is not a release-group marker: only a tag at the end
+/// of the name is. `Kobayashi-san Chi no Maid Dragon` used to come apart into
+/// titles `["Kobayashi", "no Maid Dragon"]` with group `san`.
 #[test]
 fn does_not_split_a_hyphenated_title() {
     for name in [
@@ -53,6 +62,7 @@ fn does_not_split_a_hyphenated_title() {
     }
 }
 
+/// A trailing group tag still parses, including when a version follows it.
 #[test]
 fn keeps_an_honorific_attached_to_the_title() {
     let r = sacha::parse("[Erai-raws] Kobayashi-san Chi no Maid Dragon [1080p][MultiSub]").unwrap();
@@ -61,6 +71,7 @@ fn keeps_an_honorific_attached_to_the_title() {
     assert_eq!(r.audio_language_terms, None);
 }
 
+/// Scene releases separate words with dots; the title has to come out spaced.
 #[test]
 fn still_reads_a_trailing_group_tag() {
     let r = sacha::parse("Digimon Beatbreak S01E41 1080p WEBRip x265-Rapta").unwrap();
