@@ -1,6 +1,6 @@
 [package]
 name = "sacha"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "A media string parser for filenames, torrent names, and any string representing media metadata"
 
