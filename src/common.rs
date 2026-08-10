@@ -74,8 +74,10 @@ pub const BATCH_TERMS: &[&str] = &[
     "batched", "batch",
 ];
 
+// `Part` and `Cour` name a season's subdivision and were previously read as title words, so
+// `Enen no Shouboutai: San no Shou Part 2` claimed to be the same media as Part 1.
 pub const SEASON_PART_TERMS: &[&str] = &[
-    "Season", "S",
+    "Season", "Part", "Cour", "シーズン", "S",
 ];
 
 pub const AUDIO_LANGUAGE_TERMS: &[&str] = &[

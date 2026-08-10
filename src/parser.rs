@@ -181,7 +181,7 @@ fn episode_token(input: &str) -> IResult<&str, String> {
     Ok((rest, format!("{} {} {}", start, sep, end)))
 }
 
-fn season_token(input: &str) -> IResult<&str, String> {
+fn season_prefix_token(input: &str) -> IResult<&str, String> {
     let (rest, part) = match_indexed_icase(ix_season_part_terms(), input)?;
     let (rest, digits_and_spaces) = take_while1(|c: char| c.is_ascii_digit() || c == ' ')(rest)?;
     if !digits_and_spaces.chars().any(|c| c.is_ascii_digit()) {
@@ -189,6 +189,102 @@ fn season_token(input: &str) -> IResult<&str, String> {
     }
     let trimmed_end = digits_and_spaces.trim_end();
     Ok((rest, format!("{}{}", part, trimmed_end)))
+}
+
+/// Words that may follow an English ordinal. Spelled out rather than reusing
+/// [`SEASON_PART_TERMS`] because that list carries the bare `S`, and `2nd S` is not a season.
+const ORDINAL_SEASON_WORDS: &[&str] = &["Season", "Part", "Cour"];
+
+/// `4th Season` puts the number before the word, so the prefix form cannot reach it. It is the
+/// second most common season spelling in the metadata sources, behind `Season 4` and ahead of
+/// every non-Latin form put together.
+fn season_ordinal_token(input: &str) -> IResult<&str, String> {
+    let fail = || nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag));
+
+    let digits: usize = input.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return Err(fail());
+    }
+    let rest = &input[digits..];
+    let suffix = rest.get(..2).ok_or_else(fail)?;
+    if !matches!(suffix.to_ascii_lowercase().as_str(), "st" | "nd" | "rd" | "th") {
+        return Err(fail());
+    }
+    let rest = &rest[2..];
+    let spaces = rest.chars().take_while(|c| *c == ' ').count();
+    let rest = &rest[spaces..];
+
+    let word = ORDINAL_SEASON_WORDS
+        .iter()
+        .find(|word| {
+            rest.get(..word.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(word))
+        })
+        .ok_or_else(fail)?;
+    let rest = &rest[word.len()..];
+    // `2nd Seasonal` is not a season, so the word has to end here
+    if rest.chars().next().is_some_and(char::is_alphanumeric) {
+        return Err(fail());
+    }
+
+    let taken = input.len() - rest.len();
+    Ok((rest, input[..taken].to_string()))
+}
+
+fn cjk_digit(c: char) -> Option<u32> {
+    match c {
+        '〇' | '零' => Some(0),
+        '一' => Some(1),
+        '二' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
+/// Units that turn a number into a season: 期 and 季 in Japanese and Chinese, 기 in Korean.
+/// 話 and 集 are deliberately absent, those count episodes.
+const CJK_SEASON_UNITS: &[char] = &['期', '季', '기'];
+
+/// `第二季` and `4기` name a season the way `Season 2` does, but the number sits between the
+/// marker and the unit, which no prefix or suffix form can express. Chinese writes the number
+/// itself in CJK numerals, so 第四季 has no ascii digit to key off at all.
+fn season_cjk_token(input: &str) -> IResult<&str, String> {
+    let fail = || nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag));
+
+    let rest = input.strip_prefix('第').unwrap_or(input);
+
+    let ascii: usize = rest.chars().take_while(char::is_ascii_digit).count();
+    let number: usize = if ascii > 0 {
+        ascii
+    } else {
+        rest.chars()
+            .take_while(|c| cjk_digit(*c).is_some() || *c == '十')
+            .map(char::len_utf8)
+            .sum()
+    };
+    if number == 0 {
+        return Err(fail());
+    }
+    let rest = &rest[number..];
+
+    let unit = rest.chars().next().ok_or_else(fail)?;
+    if !CJK_SEASON_UNITS.contains(&unit) {
+        return Err(fail());
+    }
+    let rest = &rest[unit.len_utf8()..];
+
+    let taken = input.len() - rest.len();
+    Ok((rest, input[..taken].to_string()))
+}
+
+fn season_token(input: &str) -> IResult<&str, String> {
+    alt((season_cjk_token, season_ordinal_token, season_prefix_token))(input)
 }
 
 fn non_delimited_group(input: &str) -> IResult<&str, String> {
