@@ -2,6 +2,8 @@
   "private": true,
   "scripts": {
     "build": "wasm-pack build --target web --release && node scripts/patch-pkg.mjs",
-    "test": "cargo test"
+    "test": "cargo test",
+    "verify-pkg": "node scripts/verify-pkg.mjs",
+    "publish": "node scripts/publish.mjs"
   }
 }
