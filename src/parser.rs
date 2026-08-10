@@ -4,7 +4,6 @@ use nom::{
     bytes::complete::{take_while1, take_while_m_n},
     character::complete::{char, satisfy},
     combinator::recognize,
-    multi::many1,
     sequence::tuple,
 };
 
@@ -291,6 +290,11 @@ fn non_delimited_group(input: &str) -> IResult<&str, String> {
     let (rest, _) = char('-')(input)?;
     let (rest, name) = take_while1(|c: char| c != '.' && !is_whitespace(c) && !is_closing_delim(c))(rest)?;
     if name.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+    }
+    // `-サイレン-`, `-Uni:Birth-`, `-吉原大炎上-`: the decoration a japanese title hangs a subtitle
+    // in. The closing hyphen is what tells it apart, since no release group signs off with one.
+    if name.ends_with('-') {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
     }
     // a group tag is the tail of the name: this keeps the honorific in `Kobayashi-san Chi no Maid Dragon` attached to the title
@@ -621,6 +625,30 @@ fn parse_non_delimited_metadata(input: &str) -> IResult<&str, RootToken> {
     Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
 }
 
+/// A hyphen glued to the name being read, as in `BAKI-DOU`, `Akane-banashi` or `Nakamura-kun!!`.
+///
+/// A real `-GROUP` tag comes after the release metadata, so it is reached at the START of a root
+/// token (`VOSTFR` then `-LTPD`) or after whitespace (`H.265 -NanDesuKa`), never in the middle of a
+/// name. Without this, every catalogue title ending in a hyphenated word had its last word taken:
+/// 100 of 2271 real titles, `Hana-Kimi` down to `Hana`, `A Misanthrope Teaches a Class for
+/// Demi-Humans` down to `... for Demi`.
+///
+/// Suppressed only when the hyphen rule is the ONLY thing that matched, so `-S01`, `-1080p` and
+/// `-v2` still cut the title where they should, and only when the word reads like a word: the tag in
+/// `X.265-EVO[TGx]` runs into a bracket, which no part of a name does.
+fn is_glued_group(remaining: &str) -> bool {
+    let Ok((_, tag)) = non_delimited_group(remaining) else {
+        return false;
+    };
+    if tag.chars().any(is_opening_delim) {
+        return false;
+    }
+    let after_hyphen = &remaining['-'.len_utf8()..];
+    try_metadata_token(after_hyphen).is_err()
+        && parse_version(after_hyphen).is_err()
+        && parse_episode(after_hyphen).is_err()
+}
+
 fn parse_data_token(input: &str) -> IResult<&str, RootToken> {
     if input.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Eof)));
@@ -631,7 +659,9 @@ fn parse_data_token(input: &str) -> IResult<&str, RootToken> {
     while pos < input.len() {
         let remaining = &input[pos..];
 
-        if parse_delimited_block(remaining).is_ok() || parse_non_delimited_metadata(remaining).is_ok() {
+        if parse_delimited_block(remaining).is_ok()
+            || (!is_glued_group(remaining) && parse_non_delimited_metadata(remaining).is_ok())
+        {
             break;
         }
 
@@ -654,8 +684,42 @@ fn parse_token(input: &str) -> IResult<&str, RootToken> {
     ))(input)
 }
 
+/// A metadata term needs whitespace in front of it, which is what stops `Season` claiming the front
+/// of a word. A CLOSING BRACKET is just as good a boundary, and japanese titles write no space after
+/// one: `【推しの子】第3期` and `探偵はもう、死んでいる。Season2` both left the season glued to the
+/// name, so the name came out carrying it. Nothing else changes, since a term reached this way still
+/// has to end on a real boundary.
 fn parse_all_tokens(input: &str) -> IResult<&str, Vec<RootToken>> {
-    many1(parse_token)(input)
+    let mut tokens = Vec::new();
+    let mut rest = input;
+    let mut after_close = false;
+
+    while !rest.is_empty() {
+        if after_close {
+            if let Ok((next, token)) = try_metadata_token(rest) {
+                if is_token_boundary(next) {
+                    tokens.push(RootToken::Metadata(vec![token]));
+                    rest = next;
+                    continue;
+                }
+            }
+        }
+
+        let before = rest;
+        let (next, token) = parse_token(rest)?;
+        if next.len() == before.len() {
+            break;
+        }
+        let consumed = &before[..before.len() - next.len()];
+        after_close = consumed.ends_with(is_closing_delim);
+        tokens.push(token);
+        rest = next;
+    }
+
+    if tokens.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Many1)));
+    }
+    Ok((rest, tokens))
 }
 
 fn is_non_word(c: char) -> bool {
@@ -759,29 +823,37 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
 
     let mut result = ParseResult::default();
 
+    // whether the leading bracket is even the KIND a group tag is written in
+    let leads_with_group_bracket = input
+        .chars()
+        .next()
+        .is_some_and(|c| GROUP_DELIMITERS.iter().any(|&(open, _)| open == c));
+
+    // held back rather than pushed, because whether it is a group at all depends on the rest of the
+    // string: see `has_release_evidence`
+    let mut leading_bracket: Option<String> = None;
+
     let mut first = true;
     for token in &tokens {
         match token {
             RootToken::Metadata(items) => {
-                if first && items.is_empty() {
-                    // deliberate no-op: a first delimited block with no recognized metadata is handled by the first-token logic just below
-                }
-
                 if first {
                     first = false;
                     // a leading bracket holding nothing but text is the release group, as in `[SubsPlease]`, so it outranks the title reading
-                    if items.len() == 1 && items[0].kind == MetadataKind::Title {
-                        result.push(&MetadataKind::Group, items[0].value.clone());
-                        continue;
-                    }
-                    if items.is_empty() {
-                        if let Some(group_text) = extract_first_bracket_content(input) {
-                            let trimmed = group_text.trim().to_string();
-                            if !trimmed.is_empty() {
-                                result.push(&MetadataKind::Group, trimmed);
-                            }
+                    if leads_with_group_bracket {
+                        if items.len() == 1 && items[0].kind == MetadataKind::Title {
+                            leading_bracket = Some(items[0].value.clone());
+                            continue;
                         }
-                        continue;
+                        if items.is_empty() {
+                            if let Some(group_text) = extract_first_bracket_content(input) {
+                                let trimmed = group_text.trim().to_string();
+                                if !trimmed.is_empty() {
+                                    leading_bracket = Some(trimmed);
+                                }
+                            }
+                            continue;
+                        }
                     }
                 }
 
@@ -800,7 +872,43 @@ pub fn parse(input: &str) -> Result<ParseResult, String> {
         }
     }
 
+    // both go to the FRONT of their list, because the leading bracket is the first thing in the name
+    if let Some(text) = leading_bracket {
+        // Reading it as a group has to leave a title behind: a release name always names the show
+        // after the group tag. `[Oshi no Ko] 3rd Season` leaves nothing but a season, so the bracket
+        // IS the name, while `[MTBB] Made in Abyss S2 - ...` leaves a title and stays a group tag.
+        if result.titles.is_some() || has_release_evidence(&result) {
+            result.groups.get_or_insert_with(Vec::new).insert(0, text);
+        } else {
+            result.titles = Some(vec![text]);
+        }
+    }
+
     Ok(result)
+}
+
+/// Whether anything in the name could only have come from a RELEASE.
+///
+/// A catalogue title carries none of these, which is what separates `[Oshi no Ko] 3rd Season`, where
+/// the bracket is the show's own name, from `[SubsPlease] Oshi no Ko - 01 (1080p)`, where it is the
+/// group. Titles, seasons and dates are deliberately absent from the list: a catalogue carries all
+/// three, so none of them is evidence of anything.
+fn has_release_evidence(result: &ParseResult) -> bool {
+    result.resolution_terms.is_some()
+        || result.video_codec_terms.is_some()
+        || result.audio_codec_terms.is_some()
+        || result.video_terms.is_some()
+        || result.audio_terms.is_some()
+        || result.container_terms.is_some()
+        || result.source_terms.is_some()
+        || result.type_terms.is_some()
+        || result.subtitle_terms.is_some()
+        || result.subtitle_language_terms.is_some()
+        || result.audio_language_terms.is_some()
+        || result.batch_terms.is_some()
+        || result.version_terms.is_some()
+        || result.episode_terms.is_some()
+        || result.groups.is_some()
 }
 
 /// Extract the content of the first bracketed section from the raw input.

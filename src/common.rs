@@ -173,6 +173,15 @@ pub const DELIMITERS: &[(char, char)] = &[
     ('\u{FF08}', '\u{FF09}'), // （）
 ];
 
+/// The brackets a release group writes its tag in.
+///
+/// Every delimiter above groups text, but only these three ever hold a group. The CJK corner and
+/// lenticular brackets are part of a NAME: `【推しの子】第3期` and
+/// `「お前ごときが魔王に勝てると思うな」と勇者パーティを追放されたので` are titles in full, and reading
+/// the leading bracket as a tag threw the show's actual name away and promoted whatever followed
+/// it to the title.
+pub const GROUP_DELIMITERS: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}')];
+
 // precomputed rather than formatted from `RESOLUTIONS` on the fly: the resolution parser runs at every character position and `to_string()` allocated a `String` per candidate
 /// Decimal spellings of [`RESOLUTIONS`], in the same order. Precomputed because
 /// the resolution parser runs at every character position and formatting these
