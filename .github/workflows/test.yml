@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # wasm32 is here for the check below, not for the tests: they build for the host only.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # package.json's `test` script is a passthrough to this, and the repo has no npm
+      # dependencies and no package-lock.json, so nothing here needs node.
+      # --locked makes a Cargo.lock that no longer matches Cargo.toml fail the run instead of
+      # silently resolving to versions nobody has tested.
+      - run: cargo test --locked
+
+      # The published artifact is wasm, and `cargo test` never builds for that target, so a break
+      # that only shows up on wasm32 would otherwise stay hidden until the tag build in build.yaml.
+      - run: cargo check --locked --lib --target wasm32-unknown-unknown
