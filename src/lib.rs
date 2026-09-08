@@ -2,9 +2,10 @@ mod common;
 mod normalize;
 mod parser;
 mod search;
+mod title_key;
 
 pub use parser::{parse, ParseResult};
-pub use search::{Index, SearchConfig, SearchHit};
+pub use search::{Index, SearchConfig, SearchHit, TitleMatch};
 
 use wasm_bindgen::prelude::*;
 
