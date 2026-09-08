@@ -1,0 +1,316 @@
+# Publishes sacha to npm when its version changes.
+#
+# THE FILENAME IS PART OF THE TRUST RELATIONSHIP AND MUST NOT CHANGE. npm trusted publishing binds
+# the package to a repository PLUS a workflow filename, and the configuration on npmjs.org names
+# `Banou26/sacha` and `publish.yml`. Renaming this file, or the repository, breaks publishing and
+# needs reconfiguring by hand on npmjs.org. The `name:` below is display text only and is safe to
+# edit. This replaced a `publish.yaml`, one letter away, which is exactly the mistake that costs a
+# release: the trusted publisher would not have matched it.
+#
+# No token is stored anywhere. npm exchanges this job's OIDC identity for a short lived credential,
+# which is why `id-token: write` below is not optional and why there is no secret to leak or rotate.
+# The workflow it replaced carried `secrets.NPM_TOKEN`; there is no longer any such secret to keep
+# valid, and the local `npm run publish` path now needs a login that CI does not.
+#
+# The shape is inherited from Banou26/ponyfill's publish.yaml, which paid for these lessons in failed
+# runs. What differs is all wasm: the version lives in Cargo.toml rather than package.json, the thing
+# published is the GENERATED `pkg/` directory rather than the repo, and the artifact is only worth
+# anything if its wasm loads, so the check that matters installs the tarball and calls into it.
+name: Publish sacha
+
+on:
+  push:
+    branches: [ main ]
+    # a publish is a version change, and for a Rust crate the version lives in exactly one file
+    paths:
+      - 'Cargo.toml'
+  # for re-running a publish that failed AFTER the version already landed on main, which a push
+  # cannot repeat
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # the OIDC token npm exchanges for short lived publish credentials. Without it the job cannot
+      # authenticate at all, because there is deliberately no token secret anywhere.
+      id-token: write
+      # only to push the release tag
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # NO `registry-url` on purpose. That input writes an .npmrc pinning auth to ${NODE_AUTH_TOKEN},
+      # which is empty under trusted publishing, and turns a working OIDC exchange into an ENEEDAUTH
+      # that reads like a revoked credential. registry.npmjs.org is the default, so nothing is lost.
+      # The workflow this replaced set it, alongside a token that no longer exists.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          # setup-node@v5 caches the package manager BY DEFAULT through this separate input, and the
+          # post-job step it registers fails with `Path Validation Error` whenever there is nothing
+          # to save. This repo has no package-lock.json and no npm dependencies at all, so that is
+          # EVERY run: the job would go red while every step in it reported success.
+          package-manager-cache: false
+
+      # Trusted publishing needs npm 11.5.1 or newer. Pinned rather than assumed: the day the runner
+      # image moves to an older npm, the publish step fails with an auth error that looks like a
+      # revoked credential rather than a stale CLI.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          echo "npm $(npm --version)"
+
+      # Decided BEFORE anything is built, so an unchanged version costs seconds rather than a full
+      # Rust and wasm build.
+      #
+      # Compared against the REGISTRY rather than against the previous commit, which makes this
+      # idempotent: a publish that failed halfway is retried correctly and a re-run of a successful
+      # one is a no-op. A git diff reports "changed" on the retry and "unchanged" on the re-run, and
+      # both are wrong.
+      #
+      # FOUR outcomes, not two, because "the registry says 0.2.3" and "the registry did not answer"
+      # are different facts and only one of them is evidence.
+      - name: Decide whether the version moved
+        id: decide
+        run: |
+          # the same expression scripts/publish.mjs reads, so the two paths cannot disagree
+          LOCAL=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          NAME=sacha
+          if [ -z "$LOCAL" ]; then
+            echo "::error::could not read the version from Cargo.toml"; exit 1
+          fi
+          echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+          set +e
+          PUBLISHED=$(cd "${RUNNER_TEMP:-/tmp}" && npm view "$NAME" version 2>/tmp/view.err)
+          CODE=$?
+          set -e
+
+          if [ "$CODE" -eq 0 ] && [ -n "$PUBLISHED" ]; then
+            :
+          elif grep -q 'E404' /tmp/view.err; then
+            PUBLISHED=""
+            echo "::notice::$NAME is not on the registry; this would be its first publish."
+          else
+            echo "::error::could not read $NAME from the registry (exit $CODE). Refusing to guess."
+            cat /tmp/view.err
+            exit 1
+          fi
+
+          echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" = "$PUBLISHED" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME $LOCAL is already published; nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::publishing $NAME ${PUBLISHED:-none} -> $LOCAL"
+          fi
+
+      # wasm32 is here for the check below, not for the tests: those build for the host.
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.decide.outputs.changed == 'true'
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.decide.outputs.changed == 'true'
+
+      # Nothing else gates main in this repo, so the tests run HERE, before anything is uploaded. An
+      # npm version cannot be republished once it is wrong.
+      #
+      # `--locked` makes a Cargo.lock that no longer matches Cargo.toml fail the run instead of
+      # silently resolving to versions nobody has tested, which matters most on the one commit that
+      # edits Cargo.toml.
+      - name: Test
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          cargo test --locked
+          cargo check --locked --lib --target wasm32-unknown-unknown
+
+      # The official installer, from rustwasm's own domain, which is what build.yaml and the previous
+      # publish workflow both used.
+      - name: Install wasm-pack
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          wasm-pack --version
+
+      # `npm run build` is `wasm-pack build --target web --release` followed by scripts/patch-pkg.mjs,
+      # which is what turns wasm-pack's output into the package that is actually published: the name,
+      # the exports map, the files list and the hand written types all come from there. Running
+      # wasm-pack alone would publish a package with a different name and no types.
+      - name: Build
+        if: steps.decide.outputs.changed == 'true'
+        run: npm run build
+
+      # `pkg/` is gitignored, so a stale or half-applied build is exactly what gets published and
+      # nothing else would notice. This loads the built wasm and asserts behaviour only the current
+      # grammar produces.
+      - name: Verify the build is the build
+        if: steps.decide.outputs.changed == 'true'
+        run: node scripts/verify-pkg.mjs
+
+      # wasm-pack copies the version out of Cargo.toml; a mismatch means pkg/ came from an older
+      # build, which is the one thing verify-pkg cannot see.
+      - name: The built package carries the version being released
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          BUILT=$(node -p "require('./pkg/package.json').version")
+          if [ "$BUILT" != "${{ steps.decide.outputs.local }}" ]; then
+            echo "::error::pkg/ says $BUILT, Cargo.toml says ${{ steps.decide.outputs.local }}"
+            exit 1
+          fi
+          echo "pkg/ is $BUILT"
+
+      - name: Pack
+        id: pack
+        if: steps.decide.outputs.changed == 'true'
+        working-directory: pkg
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          TGZ=$(ls -t "$RUNNER_TEMP"/*.tgz | head -1)
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+          echo "packed $TGZ"
+
+      # Read the TARBALL, never the sources or the directory that produced it. This is the only step
+      # that observes what a consumer actually receives.
+      - name: Verify the tarball before it leaves the runner
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          TGZ="${{ steps.pack.outputs.tgz }}"
+          MANIFEST=$(tar xzOf "$TGZ" package/package.json)
+          NAME=$(printf '%s' "$MANIFEST" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")
+          VERSION=$(printf '%s' "$MANIFEST" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          echo "artifact: $NAME@$VERSION"
+
+          if [ "$NAME" != "${{ steps.decide.outputs.name }}" ]; then
+            echo "::error::packed name is $NAME, expected ${{ steps.decide.outputs.name }}"; exit 1
+          fi
+          if [ "$VERSION" != "${{ steps.decide.outputs.local }}" ]; then
+            echo "::error::packed version $VERSION does not match ${{ steps.decide.outputs.local }}"; exit 1
+          fi
+
+          # THE FAILURE THIS EXISTS FOR: everything here is generated into a gitignored directory, so
+          # a pack that ran without a build ships a package that resolves and does nothing.
+          for want in sacha.js sacha.d.ts sacha_bg.wasm sacha_bg.wasm.d.ts; do
+            if ! tar tzf "$TGZ" | grep -q "^package/$want$"; then
+              echo "::error::the tarball is missing $want, which the exports map points at"; exit 1
+            fi
+          done
+
+          # A wasm module that is present but tiny is a build that fell over rather than one that ran.
+          BYTES=$(tar xzOf "$TGZ" package/sacha_bg.wasm | wc -c)
+          echo "wasm is $BYTES bytes"
+          if [ "$BYTES" -lt 500000 ]; then
+            echo "::error::sacha_bg.wasm is only $BYTES bytes, which is not a built module"; exit 1
+          fi
+
+          # `files` decides the whole payload, and its absence silently falls back to .gitignore,
+          # which for a wasm-pack directory would ship .gitignore and the build's own leftovers.
+          if tar tzf "$TGZ" | grep -qE '^package/(src|target|\.gitignore)'; then
+            echo "::error::the tarball contains build leftovers, so the files field is missing or wrong"
+            tar tzf "$TGZ" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "tarball contents:"
+          tar tzf "$TGZ" | sed 's/^/  /'
+
+      # The strongest check available before the upload: install the tarball into an empty project and
+      # use it the way a consumer does, through the exports map rather than by file path.
+      #
+      # For a wasm package that means LOADING the wasm, not merely importing the glue. Every export is
+      # a binding that traps until `init` has run, so an import that succeeds proves nothing at all
+      # about the module beside it. The two calls below are the two halves of the published surface:
+      # the parser, and the matcher that stub's nyaa source thresholds on.
+      - name: Install the tarball somewhere else and call into it
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          CONSUMER="$RUNNER_TEMP/consumer"
+          mkdir -p "$CONSUMER" && cd "$CONSUMER"
+          printf '{"name":"c","type":"module","private":true}\n' > package.json
+          npm install "${{ steps.pack.outputs.tgz }}" --no-audit --no-fund
+
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises'
+            import init, { parse, ReleaseIndex } from 'sacha'
+
+            // resolved through the package's own exports map, so a wrong path here is a wrong package
+            await init({ module_or_path: await readFile(new URL(import.meta.resolve('sacha/sacha_bg.wasm'))) })
+
+            const parsed = parse('[SubsPlease] Sakamoto Days - 05 (1080p) [ABC].mkv')
+            if (!parsed.titles?.includes('Sakamoto Days')) {
+              console.error('the parser did not read the title:', JSON.stringify(parsed)); process.exit(1)
+            }
+            if (!parsed.episodeTerms?.includes('05')) {
+              console.error('the parser did not read the episode:', JSON.stringify(parsed)); process.exit(1)
+            }
+
+            const index = new ReleaseIndex([
+              '[SubsPlease] Sakamoto Days - 05 (1080p)',
+              '[SubsPlease] Bocchi the Rock! - 05 (1080p)',
+            ])
+            const [mine, theirs] = index.titleScores(['Sakamoto Days'])
+            if (!(mine >= 0.78)) { console.error('a release of the show scored', mine); process.exit(1) }
+            if (!(theirs < 0.78)) { console.error('a release of another show scored', theirs); process.exit(1) }
+
+            console.log('the published tarball parses and matches:', mine.toFixed(3), 'against', theirs.toFixed(3))
+          "
+
+      # No credential is passed. npm exchanges this job's OIDC identity for a short lived token
+      # against the trusted publisher configured on npmjs.org for Banou26/sacha + publish.yml.
+      # BOTH HALVES ARE THE TRUST RELATIONSHIP: renaming this file breaks publishing, and so does
+      # renaming the repository.
+      #
+      # Provenance is attested automatically under trusted publishing, so --provenance is not passed.
+      - name: Publish
+        if: steps.decide.outputs.changed == 'true'
+        run: npm publish "${{ steps.pack.outputs.tgz }}" --access public
+
+      # Ask the REGISTRY. Everything above is a claim about what was uploaded; only this observes what
+      # a consumer would actually get.
+      #
+      # Over HTTP rather than `npm view`, and that is the whole point of the step working at all: the
+      # CLI answers from a cache that the lookup in `decide` above leaves holding a negative, so it
+      # keeps reporting the old version long after the registry is serving the new one.
+      - name: Confirm the registry serves it
+        if: steps.decide.outputs.changed == 'true'
+        env:
+          PKG: ${{ steps.decide.outputs.name }}
+          WANT: ${{ steps.decide.outputs.local }}
+        run: |
+          CODE=000
+          for i in $(seq 1 20); do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$PKG/$WANT" || echo 000)
+            if [ "$CODE" = "200" ]; then
+              echo "::notice::$PKG $WANT is live on npm"
+              exit 0
+            fi
+            echo "registry answered $CODE for $PKG@$WANT, retrying ($i/20)"
+            sleep 15
+          done
+          echo "::error::$PKG $WANT was published but the registry never served it (last status $CODE)"
+          exit 1
+
+      # Tag only after the registry confirms, so a tag can never name a release that is not there.
+      # This also fires build.yaml, which uploads the same artifact for anyone who wants it off the
+      # tag rather than off npm.
+      - name: Tag the release
+        if: steps.decide.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.decide.outputs.local }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already exists, leaving it alone"
+            exit 0
+          fi
+          git tag "$TAG" "${{ github.sha }}"
+          git push origin "$TAG"
