@@ -98,3 +98,54 @@ fn splits_a_scene_release_title() {
         "got {t:?}"
     );
 }
+
+fn episodes(input: &str) -> Vec<String> {
+    sacha::parse(input).expect("parse").episode_terms.unwrap_or_default()
+}
+
+/// The commonest shape on nyaa, and the one the parser could not read: of the 1125 names in
+/// `nyaa.txt`, ZERO yielded an episode term that parses as a number, because the only episode rule
+/// required a RANGE. The number stayed inside the title instead.
+#[test]
+fn a_dashed_number_is_the_episode() {
+    assert_eq!(episodes("[Group] Show - 07 [1080p]"), vec!["07"]);
+    assert_eq!(titles("[Group] Show - 07 [1080p]"), vec!["Show"]);
+    assert_eq!(episodes("[SubsPlease] Mahouka Koukou no Yuutousei - 01 (1080p) [7DD7D495].mkv"), vec!["01"]);
+}
+
+/// A spaced dash is the episode separator, so a title ending in a digit is NOT a range. Reading it as
+/// one made every release of these shows a batch with no episode, which drops them entirely.
+#[test]
+fn a_title_ending_in_a_digit_keeps_its_episode() {
+    assert_eq!(episodes("[Erai-raws] Thunder 3 - 09 [1080p]"), vec!["09"]);
+    assert_eq!(titles("[Erai-raws] Thunder 3 - 09 [1080p]"), vec!["Thunder 3"]);
+    assert_eq!(episodes("[shincaps] Bungou Stray Dogs Wan! 2 - 05 (BS11 1920x1080 MPEG2 AAC).ts"), vec!["05"]);
+}
+
+/// A real range is written with a tilde, unspaced, or introduced by a word. Each still reads as one,
+/// or a whole pack would be filed under a single episode.
+#[test]
+fn a_range_is_still_a_range() {
+    assert_eq!(episodes("[Erai-raws] Cyberpunk - Edgerunners - 01 ~ 10 [1080p]"), vec!["01 ~ 10"]);
+    assert_eq!(episodes("Detective Conan Episode Selection FBI Intervention Episode 13 - 25 [Dual Audio]"), vec!["13 - 25"]);
+    assert_eq!(episodes("[Grp] Show Vol. 3 - 4 [BD]"), vec!["3 - 4"]);
+}
+
+/// Four digits are ambiguous and only the range decides. `date_token` takes any four digits, so a
+/// long running show's episode was read as a year: Detective Conan 1209 had a date and no episode.
+#[test]
+fn four_digits_are_an_episode_unless_they_could_be_a_year() {
+    assert_eq!(episodes("[Erai-raws] Detective Conan - 1209 [1080p]"), vec!["1209"]);
+    assert!(episodes("[MagicStar] Golden Kamuy - Abashiri Kangoku Shuugeki Hen - 2026 [WEBDL]").is_empty());
+    assert_eq!(
+        sacha::parse("[MagicStar] Golden Kamuy - Abashiri Kangoku Shuugeki Hen - 2026 [WEBDL]").expect("parse").dates.unwrap_or_default(),
+        vec!["2026"]
+    );
+}
+
+/// A hyphen glued to a word is part of the name, not an episode separator.
+#[test]
+fn a_hyphenated_name_is_not_an_episode() {
+    assert!(episodes("[Grp] Akane-banashi [1080p]").is_empty());
+    assert_eq!(titles("[Grp] Akane-banashi [1080p]"), vec!["Akane-banashi"]);
+}
