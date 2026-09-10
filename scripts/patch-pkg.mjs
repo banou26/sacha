@@ -33,7 +33,7 @@ Object.assign(pkg, {
   sideEffects: false,
   repository: {
     type: 'git',
-    url: 'git+https://github.com/Banou26/sacha.git'
+    url: 'git+https://github.com/banou26/sacha.git'
   },
   keywords: [
     'parser',

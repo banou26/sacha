@@ -2,7 +2,7 @@
 #
 # THE FILENAME IS PART OF THE TRUST RELATIONSHIP AND MUST NOT CHANGE. npm trusted publishing binds
 # the package to a repository PLUS a workflow filename, and the configuration on npmjs.org names
-# `Banou26/sacha` and `publish.yml`. Renaming this file, or the repository, breaks publishing and
+# `banou26/sacha` and `publish.yml`. Renaming this file, or the repository, breaks publishing and
 # needs reconfiguring by hand on npmjs.org. The `name:` below is display text only and is safe to
 # edit. This replaced a `publish.yaml`, one letter away, which is exactly the mistake that costs a
 # release: the trusted publisher would not have matched it.
@@ -12,7 +12,7 @@
 # The workflow it replaced carried `secrets.NPM_TOKEN`; there is no longer any such secret to keep
 # valid, and the local `npm run publish` path now needs a login that CI does not.
 #
-# The shape is inherited from Banou26/ponyfill's publish.yaml, which paid for these lessons in failed
+# The shape is inherited from banou26/ponyfill's publish.yaml, which paid for these lessons in failed
 # runs. What differs is all wasm: the version lives in Cargo.toml rather than package.json, the thing
 # published is the GENERATED `pkg/` directory rather than the repo, and the artifact is only worth
 # anything if its wasm loads, so the check that matters installs the tarball and calls into it.
@@ -265,7 +265,7 @@ jobs:
           "
 
       # No credential is passed. npm exchanges this job's OIDC identity for a short lived token
-      # against the trusted publisher configured on npmjs.org for Banou26/sacha + publish.yml.
+      # against the trusted publisher configured on npmjs.org for banou26/sacha + publish.yml.
       # BOTH HALVES ARE THE TRUST RELATIONSHIP: renaming this file breaks publishing, and so does
       # renaming the repository.
       #
