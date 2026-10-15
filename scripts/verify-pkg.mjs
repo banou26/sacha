@@ -7,7 +7,7 @@
 
 import { readFile } from 'node:fs/promises'
 
-import init, { parse } from '../pkg/sacha.js'
+import init, { ReleaseIndex, parse } from '../pkg/sacha.js'
 
 await init({ module_or_path: await readFile(new URL('../pkg/sacha_bg.wasm', import.meta.url)) })
 
@@ -58,9 +58,20 @@ for (const [field, want] of Object.entries(wanted)) {
   if (shape[field] !== want) failures.push(`  release name ${field}: ${JSON.stringify(shape[field])}, wanted ${JSON.stringify(want)}`)
 }
 
+// The stub plugin scores every release of a nyaa walk against every title of the show (HOR-513). Built
+// size-first (opt-level "z") this walk took 5.3 s in node on a desktop and held the Nyaa button back by
+// about as long; built at opt-level 2 it takes 0.6 s (1.6 s on a loaded one). The bound leaves room for a slower CI runner.
+const walk = JSON.parse(await readFile(new URL('../tests/rezero-s4-nyaa-walk.json', import.meta.url), 'utf8'))
+const started = performance.now()
+const index = new ReleaseIndex(walk.names)
+index.titleScores(walk.aliases)
+index.free()
+const scoredMs = Math.round(performance.now() - started)
+if (scoredMs > 3500) failures.push(`  titleScores over ${walk.names.length} releases x ${walk.aliases.length} titles took ${scoredMs} ms, over the 3500 ms bound: is the release profile size-first again?`)
+
 if (failures.length) {
   console.error(`pkg/ failed ${failures.length} check(s):\n${failures.join('\n')}\n\nRebuild with: npm run build`)
   process.exit(1)
 }
 
-console.log(`pkg/ verified: ${EXPECTED.length} season shapes, ${NEGATIVE.length} negatives, and one release name intact`)
+console.log(`pkg/ verified: ${EXPECTED.length} season shapes, ${NEGATIVE.length} negatives, one release name intact, and a nyaa walk scored in ${scoredMs} ms`)
