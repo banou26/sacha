@@ -28,6 +28,9 @@ on:
   # cannot repeat
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: publish
   cancel-in-progress: false
@@ -40,17 +43,19 @@ jobs:
       # the OIDC token npm exchanges for short lived publish credentials. Without it the job cannot
       # authenticate at all, because there is deliberately no token secret anywhere.
       id-token: write
-      # only to push the release tag
+      # only to create the release tag
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       # NO `registry-url` on purpose. That input writes an .npmrc pinning auth to ${NODE_AUTH_TOKEN},
       # which is empty under trusted publishing, and turns a working OIDC exchange into an ENEEDAUTH
       # that reads like a revoked credential. registry.npmjs.org is the default, so nothing is lost.
       # The workflow this replaced set it, alongside a token that no longer exists.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '24'
           # setup-node@v5 caches the package manager BY DEFAULT through this separate input, and the
@@ -59,12 +64,12 @@ jobs:
           # EVERY run: the job would go red while every step in it reported success.
           package-manager-cache: false
 
-      # Trusted publishing needs npm 11.5.1 or newer. Pinned rather than assumed: the day the runner
-      # image moves to an older npm, the publish step fails with an auth error that looks like a
-      # revoked credential rather than a stale CLI.
+      # Trusted publishing needs npm 11.5.1 or newer, and a stale CLI fails the publish step with an
+      # auth error that looks like a revoked credential. Exact, so a new npm only arrives by a bump
+      # here: 12.2.0 is what run 38746196591 (2026-10-15) published 0.2.6 with.
       - name: Use an npm that supports trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.0
           echo "npm $(npm --version)"
 
       # Decided BEFORE anything is built, so an unchanged version costs seconds rather than a full
@@ -115,13 +120,12 @@ jobs:
           fi
 
       # wasm32 is here for the check below, not for the tests: those build for the host.
-      - uses: dtolnay/rust-toolchain@stable
+      # No rust-cache: a release restores nothing another job could have written.
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         if: steps.decide.outputs.changed == 'true'
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.decide.outputs.changed == 'true'
 
       # Nothing else gates main in this repo, so the tests run HERE, before anything is uploaded. An
       # npm version cannot be republished once it is wrong.
@@ -135,12 +139,12 @@ jobs:
           cargo test --locked
           cargo check --locked --lib --target wasm32-unknown-unknown
 
-      # The official installer, from rustwasm's own domain, which is what build.yaml and the previous
-      # publish workflow both used.
+      # Built from crates.io at an exact version with its own lockfile, rather than a script piped into
+      # sh. 0.13.1 is what the rustwasm installer gave run 38746196591 (2026-10-15).
       - name: Install wasm-pack
         if: steps.decide.outputs.changed == 'true'
         run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          cargo install wasm-pack --locked --version 0.13.1
           wasm-pack --version
 
       # `npm run build` is `wasm-pack build --target web --release` followed by scripts/patch-pkg.mjs,
@@ -162,10 +166,12 @@ jobs:
       # build, which is the one thing verify-pkg cannot see.
       - name: The built package carries the version being released
         if: steps.decide.outputs.changed == 'true'
+        env:
+          WANT: ${{ steps.decide.outputs.local }}
         run: |
           BUILT=$(node -p "require('./pkg/package.json').version")
-          if [ "$BUILT" != "${{ steps.decide.outputs.local }}" ]; then
-            echo "::error::pkg/ says $BUILT, Cargo.toml says ${{ steps.decide.outputs.local }}"
+          if [ "$BUILT" != "$WANT" ]; then
+            echo "::error::pkg/ says $BUILT, Cargo.toml says $WANT"
             exit 1
           fi
           echo "pkg/ is $BUILT"
@@ -184,18 +190,21 @@ jobs:
       # that observes what a consumer actually receives.
       - name: Verify the tarball before it leaves the runner
         if: steps.decide.outputs.changed == 'true'
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
+          PKG: ${{ steps.decide.outputs.name }}
+          WANT: ${{ steps.decide.outputs.local }}
         run: |
-          TGZ="${{ steps.pack.outputs.tgz }}"
           MANIFEST=$(tar xzOf "$TGZ" package/package.json)
           NAME=$(printf '%s' "$MANIFEST" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")
           VERSION=$(printf '%s' "$MANIFEST" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
           echo "artifact: $NAME@$VERSION"
 
-          if [ "$NAME" != "${{ steps.decide.outputs.name }}" ]; then
-            echo "::error::packed name is $NAME, expected ${{ steps.decide.outputs.name }}"; exit 1
+          if [ "$NAME" != "$PKG" ]; then
+            echo "::error::packed name is $NAME, expected $PKG"; exit 1
           fi
-          if [ "$VERSION" != "${{ steps.decide.outputs.local }}" ]; then
-            echo "::error::packed version $VERSION does not match ${{ steps.decide.outputs.local }}"; exit 1
+          if [ "$VERSION" != "$WANT" ]; then
+            echo "::error::packed version $VERSION does not match $WANT"; exit 1
           fi
 
           # THE FAILURE THIS EXISTS FOR: everything here is generated into a gitignored directory, so
@@ -232,11 +241,13 @@ jobs:
       # the parser, and the matcher that stub's nyaa source thresholds on.
       - name: Install the tarball somewhere else and call into it
         if: steps.decide.outputs.changed == 'true'
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
         run: |
           CONSUMER="$RUNNER_TEMP/consumer"
           mkdir -p "$CONSUMER" && cd "$CONSUMER"
           printf '{"name":"c","type":"module","private":true}\n' > package.json
-          npm install "${{ steps.pack.outputs.tgz }}" --no-audit --no-fund
+          npm install "$TGZ" --no-audit --no-fund
 
           node --input-type=module -e "
             import { readFile } from 'node:fs/promises'
@@ -272,7 +283,9 @@ jobs:
       # Provenance is attested automatically under trusted publishing, so --provenance is not passed.
       - name: Publish
         if: steps.decide.outputs.changed == 'true'
-        run: npm publish "${{ steps.pack.outputs.tgz }}" --access public
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
+        run: npm publish "$TGZ" --access public
 
       # Ask the REGISTRY. Everything above is a claim about what was uploaded; only this observes what
       # a consumer would actually get.
@@ -300,17 +313,10 @@ jobs:
           exit 1
 
       # Tag only after the registry confirms, so a tag can never name a release that is not there.
-      # This also fires build.yaml, which uploads the same artifact for anyone who wants it off the
-      # tag rather than off npm.
+      # Through the API, so the checkout keeps no write token on disk while the build runs.
       - name: Tag the release
         if: steps.decide.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="v${{ steps.decide.outputs.local }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "::notice::$TAG already exists, leaving it alone"
-            exit 0
-          fi
-          git tag "$TAG" "${{ github.sha }}"
-          git push origin "$TAG"
+          VERSION: ${{ steps.decide.outputs.local }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$GITHUB_SHA"
