@@ -6,19 +6,25 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # wasm32 is here for the check below, not for the tests: they build for the host only.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # package.json's `test` script is a passthrough to this, and the repo has no npm
       # dependencies and no package-lock.json, so nothing here needs node.
@@ -27,5 +33,5 @@ jobs:
       - run: cargo test --locked
 
       # The published artifact is wasm, and `cargo test` never builds for that target, so a break
-      # that only shows up on wasm32 would otherwise stay hidden until the tag build in build.yaml.
+      # that only shows up on wasm32 would otherwise stay hidden until the publish build.
       - run: cargo check --locked --lib --target wasm32-unknown-unknown
